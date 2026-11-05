@@ -336,7 +336,7 @@ async function main() {
     checks += 3;
 
     await saveDocument('P0-02', A, data => {
-      data.scope = [['纳入', '电流检测电阻', 'RMLE(C)', '', '', '']];
+      data.scope = [['纳入', '电流检测电阻', '产品系列 A', '', '', '']];
     });
     const previewMapping = await request('/deliverable-links/fields?p=' + A, { method: 'POST', body: {
       sourceCode: 'P0-02', targetCode: 'P1-07', sourceTable: 'scope', targetTable: 'targets',

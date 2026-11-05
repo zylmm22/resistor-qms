@@ -8,7 +8,8 @@ const project = Guide.forField('P0-01', '基本信息', {
 });
 assert.equal(project.required, '必填/自动引用');
 assert.match(project.guidance, /项目主数据/);
-assert.match(project.example, /RMLE/);
+assert.match(project.example, /精密片式固定电阻器/);
+assert.doesNotMatch(project.example, /示例：/, '示例前缀由界面统一加，数据里不要再重复');
 
 const table = Guide.forField('P1-09', '初始 BOM', {
   k: 'bom', label: '物料', type: 'table',

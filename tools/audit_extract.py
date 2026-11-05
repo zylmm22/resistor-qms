@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a read-only inventory and evidence map for the RMLE(C) project."""
+"""Build a read-only inventory and evidence map for an APQP project folder."""
 
 from __future__ import annotations
 
@@ -106,7 +106,7 @@ def parse_pdf(path: Path) -> dict:
 
 def phase_of(relative: Path) -> str:
     first = relative.parts[0] if relative.parts else ""
-    match = re.match(r"0([1-4])、RMLE", first)
+    match = re.match(r"0([1-4])、", first)
     if match:
         return f"阶段{match.group(1)}"
     if "归档版" in first:
