@@ -1,8 +1,35 @@
-# 运行时数据：数据库、附件、备份、上传模板，均不入库
+# 运行时数据：数据库、附件、备份、上传模板、初始口令，均不入库
 data/
 node_modules/
 *.log
 
+# 数据库文件（放在 data/ 之外也不能提交：含业务数据与账号）
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 初始口令 / 本地配置 / 密钥
+initial-credentials*.txt
+.env
+.env.*
+*.pem
+*.key
+
 # 生成物与临时产物
 outputs/
 *.tmp
+*.bak
+
+# Python 缓存（tools/rmle_audit_extract.py 会生成）
+__pycache__/
+*.pyc
+*.pyo
+
+# 编辑器 / 系统杂物
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
