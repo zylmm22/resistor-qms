@@ -293,6 +293,39 @@ async function main() {
     assert.equal(designRestore.status, 403, '越权恢复同样被拒绝（归属校验先于版本校验）');
     checks += 1;
 
+    /* ------------------------------------------- 账号级权限勾选 */
+    const qaUser = users.list.find(item => item.username === 'quality01');
+    assert.ok(qaUser, '应存在 quality01');
+    const custom = await ok(api('PATCH', `/admin/users/${encodeURIComponent(qaUser.user_id)}`, {
+      body: { perms: ['doc.edit', 'doc.approve'] },
+    }), '设置账号级权限');
+    assert.deepEqual(custom.user.perms, ['doc.edit', 'doc.approve'], '账号级权限应保存为自定义清单');
+
+    const qaReset = await ok(api('POST', `/admin/users/${encodeURIComponent(qaUser.user_id)}/reset-password`, {
+      body: {},
+    }), '重置 quality01 口令');
+    assert.equal(qaReset.initial_password, '123456', '重置口令应为统一初始口令 123456');
+    const customCookie = await login('quality01', '123456');
+    const customMe = await ok(fetch(`${BASE}/api/auth/me`, { headers: { Cookie: customCookie } })
+      .then(async r => ({ status: r.status, json: await r.json() })), '读取 quality01 身份');
+    assert.equal(customMe.user.must_change_password, true, '重置后仍要求首次改密');
+    // 改密后才能访问业务接口
+    await fetch(`${BASE}/api/auth/change-password`, {
+      method: 'POST', headers: { Cookie: customCookie, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ current_password: '123456', new_password: 'Quality-Custom-2026!' }),
+    });
+    const afterChange = await ok(fetch(`${BASE}/api/auth/me`, { headers: { Cookie: customCookie } })
+      .then(async r => ({ status: r.status, json: await r.json() })), '改密后身份');
+    assert.deepEqual(afterChange.user.permissions.sort(), ['doc.approve', 'doc.edit'],
+      '账号级权限应覆盖角色默认，而不是并集');
+
+    // 收回自定义：回到角色默认
+    const reverted = await ok(api('PATCH', `/admin/users/${encodeURIComponent(qaUser.user_id)}`, {
+      body: { perms: null },
+    }), '恢复角色默认权限');
+    assert.equal(reverted.user.perms, null, 'perms=null 表示按角色默认');
+    checks += 7;
+
     /* ------------------------------------------- AI 配置仅管理员 */
     const engineerAiConfig = await api('GET', '/ai/config', { as: 'engineer' });
     assert.equal(engineerAiConfig.status, 403, '非管理员不能读取 AI 配置');

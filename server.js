@@ -439,6 +439,11 @@ function requireCurrentProject(sql, ...args) {
 }
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
+// 口令策略：管理员重置时用的统一初始口令，长度下限 6 位；首次登录仍强制改密
+const DEFAULT_PASSWORD = String(process.env.QMS_DEFAULT_PASSWORD || '123456');
+const PASSWORD_MIN_LENGTH = 6;
+// 已知弱口令：不能作为“修改后”的新口令
+const WEAK_PASSWORDS = [DEFAULT_PASSWORD, 'admin123', 'engineer123', 'quality123', 'auditor123'];
 // 登录失败计数（单进程内存）：连续 5 次锁 5 分钟，避免局域网内暴力尝试。
 // 键含来源 IP：只按用户名会被“随机用户名”撑爆内存，也会让攻击者锁死他人账号。
 const LOGIN_ATTEMPTS = new Map();
@@ -481,10 +486,13 @@ function authUserFromRequest(req) {
   const token = parseCookies(req).qms_session;
   if (!token) return null;
   const row = q(`SELECT u.user_id,u.username,u.display_name,u.role,u.must_change_password,
-      u.department,u.position,u.vp_scope,u.flags
+      u.department,u.position,u.vp_scope,u.flags,u.perms_json
     FROM auth_session s JOIN auth_user u ON u.user_id=s.user_id
     WHERE s.token_hash=? AND s.expires_at>? AND u.status='启用'`, hashSession(token), DB.now());
-  return row || null;
+  if (!row) return null;
+  // 账号级权限勾选：解析后交给权限内核；为空表示沿用角色默认
+  try { row.perms = row.perms_json ? JSON.parse(row.perms_json) : null; } catch { row.perms = null; }
+  return row;
 }
 function publicUser(user) {
   return user ? { user_id: user.user_id, username: user.username, display_name: user.display_name,
@@ -528,7 +536,7 @@ function requireRoleLevel(minimum, label = '此操作') {
  */
 function requirePermission(point, label) {
   const user = sessionUser();
-  if (PM.roleCan(user.role, point, user.flags)) return user;
+  if (PM.canUser(user, point)) return user;
   throw Object.assign(
     new Error(`${label || PM.PERMISSIONS[point] || '此操作'}需要相应岗位权限（当前账号：${ROLE_NAMES[user.role] || user.role}）`),
     { statusCode: 403 }
@@ -606,8 +614,8 @@ const WRITE_GUARDS = [
 ];
 function moduleGuardAllows(user, entry) {
   const [, editPoint, approvePoint] = entry;
-  if (PM.roleCan(user.role, editPoint, user.flags)) return true;
-  if (approvePoint && PM.roleCan(user.role, approvePoint, user.flags)) return true;
+  if (PM.canUser(user, editPoint)) return true;
+  if (approvePoint && PM.canUser(user, approvePoint)) return true;
   return false;
 }
 
@@ -5473,11 +5481,26 @@ route('POST', /^\/api\/spc\/([^/]+)\/import$/, (m, body) => {
 route('GET', /^\/api\/msa$/, () => {
   const today = DB.now().slice(0, 10);
   const plans = DB.listMsaPlans(CUR);
-  const gauges = all('SELECT * FROM gauge ORDER BY gauge_id').map(gauge => ({
+  // 检具台账是全厂共享主数据，但本项目页面只能看到“本项目用过或计划要用”的台，
+  // 否则新建项目里会凭空出现一堆别的项目的设备
+  const usedGaugeIds = new Set();
+  for (const plan of plans) if (plan.gauge_id) usedGaugeIds.add(plan.gauge_id);
+  for (const row of all(`SELECT DISTINCT c.gauge_id FROM cp_row c
+      JOIN control_plan p ON p.cp_id=c.cp_id WHERE p.project_id=? AND c.gauge_id IS NOT NULL`, CUR)) {
+    usedGaugeIds.add(row.gauge_id);
+  }
+  for (const row of all('SELECT DISTINCT gauge_id FROM msa_study WHERE project_id=? AND gauge_id IS NOT NULL', CUR)) {
+    usedGaugeIds.add(row.gauge_id);
+  }
+  const markGauge = gauge => ({
     ...gauge,
     calibration_warning: !gauge.calibration_due || gauge.calibration_due < today
       || ['停用', '报废'].includes(gauge.status),
-  }));
+  });
+  const allGauges = all('SELECT * FROM gauge ORDER BY gauge_id');
+  const gauges = allGauges.filter(gauge => usedGaugeIds.has(gauge.gauge_id)).map(markGauge);
+  // 本项目还没用过的台账检具：默认隐藏，前端可让用户显式展开（临时研究需要时选别台）
+  const otherGauges = allGauges.filter(gauge => !usedGaugeIds.has(gauge.gauge_id)).map(markGauge);
   const realGaugeIds = new Set(gauges.map(gauge => gauge.gauge_id));
   const realGaugeCodes = new Set(gauges.flatMap(gauge => [gauge.gauge_id, gauge.code].filter(Boolean)));
   const planOnly = new Map();
@@ -5505,9 +5528,9 @@ route('GET', /^\/api\/msa$/, () => {
     }
     planOnly.get(key).plan_ids.push(plan.plan_id);
   }
-  const allGauges = [...gauges, ...planOnly.values()];
   return {
-    gauges: allGauges,
+    gauges: [...gauges, ...planOnly.values()],
+    other_gauges: otherGauges,
     plans,
     projectChars: projectCharacterRows(CUR).items,
     studies: all(`SELECT ms.*, COALESCE(pc.name,cm.name) char_name,
@@ -7452,15 +7475,30 @@ route('POST', /^\/api\/admin\/resync$/, (m, body) => DB.tx(() => {
 
 /* ---------------------------------------------------------------- 账号与权限 */
 // 角色目录：供账号管理页下拉选择（含部门、项目范围、是否副总板块）
-route('GET', /^\/api\/admin\/roles$/, () => ({
-  list: Object.entries(PM.ROLES).map(([key, def]) => ({
-    role: key, name: def.name, department: def.department,
-    scope: def.scope, board: def.board || '', legacy: !!def.legacy,
-    permission_count: def.permissions.includes('*') ? Object.keys(PM.PERMISSIONS).length : def.permissions.length,
-  })),
-  permissions: PM.PERMISSIONS,
-  owner_roles: PM.OWNER_ROLE_MAP,
-}), { roles: ['admin'] });
+route('GET', /^\/api\/admin\/roles$/, () => {
+  const allPoints = Object.keys(PM.PERMISSIONS);
+  const rolePerms = {};
+  Object.keys(PM.ROLES).forEach(role => {
+    const def = PM.ROLES[role];
+    rolePerms[role] = def.permissions.includes('*')
+      ? allPoints : PM.permissionsFor({ role, flags: '' });
+  });
+  return {
+    list: Object.entries(PM.ROLES).map(([key, def]) => ({
+      role: key, name: def.name, department: def.department,
+      scope: def.scope, board: def.board || '', legacy: !!def.legacy,
+      permission_count: rolePerms[key].length,
+      // 角色默认权限点，前端用来预填勾选清单
+      permissions: rolePerms[key],
+    })),
+    permissions: PM.PERMISSIONS,
+    owner_roles: PM.OWNER_ROLE_MAP,
+    // 权限点按模块分组，供账号管理页做成勾选清单
+    groups: PM.PERMISSION_GROUPS,
+    // 管理员重置口令时使用的统一初始口令（可由 QMS_DEFAULT_PASSWORD 覆盖）
+    default_password: DEFAULT_PASSWORD,
+  };
+}, { roles: ['admin'] });
 
 function userRow(row) {
   return {
@@ -7468,6 +7506,8 @@ function userRow(row) {
     role: row.role, role_name: ROLE_NAMES[row.role] || row.role,
     department: row.department || '', position: row.position || '',
     vp_scope: row.vp_scope || '', flags: row.flags || '',
+    // 账号级权限：null = 按角色默认；数组 = 管理员逐项勾选的结果
+    perms: (() => { try { return row.perms_json ? JSON.parse(row.perms_json) : null; } catch { return null; } })(),
     status: row.status, must_change_password: !!row.must_change_password,
     created_at: row.created_at || '',
   };
@@ -7486,8 +7526,8 @@ route('POST', /^\/api\/admin\/users$/, (m, body) => DB.tx(() => {
   if (!displayName) throw new Error('请填写姓名');
   if (!PM.ROLES[role]) throw new Error('角色不存在：' + role);
   if (q('SELECT 1 FROM auth_user WHERE username=?', username)) throw new Error('登录名已存在');
-  const password = String(body.password || '').trim() || crypto.randomBytes(9).toString('base64url');
-  if (password.length < 10) throw new Error('初始口令至少 10 位');
+  const password = String(body.password || '').trim() || DEFAULT_PASSWORD;
+  if (password.length < PASSWORD_MIN_LENGTH) throw new Error(`初始口令至少 ${PASSWORD_MIN_LENGTH} 位`);
   const id = uniqueId('USR', username);
   const salt = crypto.randomBytes(16).toString('hex');
   DB.db.prepare(`INSERT INTO auth_user(user_id,username,display_name,role,password_salt,password_hash,
@@ -7502,8 +7542,8 @@ route('POST', /^\/api\/admin\/users$/, (m, body) => DB.tx(() => {
     { username, role, department: body.department || '' }, `新增账号 ${displayName}`);
   return {
     ok: true, user_id: id, username,
-    // 初始口令只在创建时回显一次，便于管理员转交
-    initial_password: body.password ? undefined : password,
+    // 统一初始口令，管理员直接转交；首次登录强制改密
+    initial_password: password,
   };
 }), { roles: ['admin'] });
 
@@ -7531,9 +7571,20 @@ route('PATCH', /^\/api\/admin\/users\/([^/]+)$/, (m, body) => DB.tx(() => {
     const admins = q("SELECT COUNT(*) c FROM auth_user WHERE role='admin' AND status='启用'").c;
     if (admins <= 1) throw new Error('系统至少需要保留一个启用的管理员账号');
   }
-  DB.db.prepare(`UPDATE auth_user SET display_name=?,role=?,department=?,position=?,flags=?,vp_scope=?,status=?
-    WHERE user_id=?`).run(next.display_name, next.role, next.department, next.position,
-    next.flags, next.vp_scope, next.status, id);
+  // 账号级权限勾选：不传表示保持原样；传空数组表示“按角色默认”
+  let permsJson = old.perms_json;
+  if (body.perms !== undefined) {
+    if (body.perms === null) permsJson = null;
+    else {
+      if (!Array.isArray(body.perms)) throw new Error('权限必须是数组');
+      const unknown = body.perms.filter(point => !PM.PERMISSIONS[point]);
+      if (unknown.length) throw new Error('未知权限点：' + unknown.join('、'));
+      permsJson = body.perms.length ? JSON.stringify([...new Set(body.perms)]) : null;
+    }
+  }
+  DB.db.prepare(`UPDATE auth_user SET display_name=?,role=?,department=?,position=?,flags=?,vp_scope=?,status=?,
+    perms_json=? WHERE user_id=?`).run(next.display_name, next.role, next.department, next.position,
+    next.flags, next.vp_scope, next.status, permsJson, id);
   // 停用后立即失效其会话
   if (next.status !== '启用') DB.db.prepare('DELETE FROM auth_session WHERE user_id=?').run(id);
   L.audit(actorName(), '修改账号', 'auth_user', id, userRow(old), userRow({ ...old, ...next }),
@@ -7545,8 +7596,9 @@ route('POST', /^\/api\/admin\/users\/([^/]+)\/reset-password$/, (m, body) => DB.
   const id = decodePart(m[1]);
   const old = q('SELECT * FROM auth_user WHERE user_id=?', id);
   if (!old) throw new Error('账号不存在');
-  const password = String(body.password || '').trim() || crypto.randomBytes(9).toString('base64url');
-  if (password.length < 10) throw new Error('新口令至少 10 位');
+  // 口令策略由管理员在系统设置里统一规定（默认 123456），重置后强制首次登录改密
+  const password = String(body.password || '').trim() || DEFAULT_PASSWORD;
+  if (password.length < PASSWORD_MIN_LENGTH) throw new Error(`新口令至少 ${PASSWORD_MIN_LENGTH} 位`);
   const salt = crypto.randomBytes(16).toString('hex');
   DB.db.prepare(`UPDATE auth_user SET password_salt=?,password_hash=?,must_change_password=1
     WHERE user_id=?`).run(salt, DB.passwordDigest(password, salt), id);
@@ -9991,8 +10043,8 @@ route('GET', /^\/api\/docs\/([^/]+)$/, (m) => {
     meta: {
       ...meta, ownerRoles,
       can_edit: canEdit,
-      can_approve: boardOk && !!sessionUserRow && PM.roleCan(sessionUserRow.role, 'doc.approve', sessionUserRow.flags),
-      can_complete: boardOk && !!sessionUserRow && PM.roleCan(sessionUserRow.role, 'doc.complete', sessionUserRow.flags),
+      can_approve: boardOk && !!sessionUserRow && PM.canUser(sessionUserRow, 'doc.approve'),
+      can_complete: boardOk && !!sessionUserRow && PM.canUser(sessionUserRow, 'doc.complete'),
     },
     phaseName: (DT.PHASES[meta.phase] || {}).name || '未归类阶段', sections: view, data,
     status: effectiveDocStatus(code, row, data), updated_at: row.updated_at, version: row.version || 'V1.0',
@@ -10688,8 +10740,10 @@ const server = http.createServer(async (req, res) => {
       if (!account || !DB.verifyPassword(current, account.password_salt, account.password_hash)) {
         return json(res, 400, { error: '当前口令不正确' });
       }
-      if (next.length < 10) return json(res, 400, { error: '新口令至少 10 位' });
-      if (['admin123', 'engineer123', 'quality123', 'auditor123'].includes(next)) {
+      if (next.length < PASSWORD_MIN_LENGTH) {
+        return json(res, 400, { error: `新口令至少 ${PASSWORD_MIN_LENGTH} 位` });
+      }
+      if (WEAK_PASSWORDS.includes(next)) {
         return json(res, 400, { error: '不能使用系统已知的默认口令' });
       }
       if (next === current) return json(res, 400, { error: '新口令不能与当前口令相同' });

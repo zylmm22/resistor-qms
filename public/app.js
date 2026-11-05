@@ -180,7 +180,7 @@ const NAV = [
   { g: 'APQP 项目管理' },
   { id: 'apqp', t: 'APQP 阶段管理' },
   { id: 'gates', t: '门径评审' },
-  { id: 'tree', t: 'APQP 交付物关系图' },
+  { id: 'tree', t: '交付物影响分析' },
   { g: '质量工程工具' },
   { id: 'fmea', t: 'FMEA' },
   { id: 'cp', t: '控制计划' },
@@ -1340,13 +1340,6 @@ async function vTree() {
       if (relations.has(code)) relations.get(code).up.add(doc.code);
     }
   }
-  const stages = d.phases.map(phase => ({
-    phase: phase.no,
-    name: phase.name,
-    codes: phase.docs
-      .filter(doc => doc.group !== 'input')
-      .map(doc => doc.code),
-  })).filter(stage => stage.codes.length);
   const selectedCode = state.treeSelectedCode && byCode.has(state.treeSelectedCode)
     ? state.treeSelectedCode : 'P2-01';
   const selected = byCode.get(selectedCode);
@@ -1368,27 +1361,30 @@ async function vTree() {
   const relationLinks = codes => codes.length ? codes.map(code => byCode.has(code)
     ? `<button class="apqp-rel-link" data-code="${code}">${esc(nm(code))}<span class="mono">${code}</span></button>`
     : '<span class="dim">无直接关联</span>').join('') : '<span class="dim">无直接关联</span>';
-  $('#viewSub').textContent = '聚焦 APQP 核心交付物的输入、输出与质量闭环；阶段内完整清单由「APQP 阶段管理」查看。';
+  // 影响面：谁直接依赖它、它又直接依赖谁；只统计本项目在册交付物
+  const downstreamOf = code => [...(relations.get(code)?.down || [])];
+  // 把“整页阶段墙”换成“选一个文件看影响面”：阶段墙与「APQP 阶段管理」重复
+  const options = d.phases.map(phase => {
+    const docs = phase.docs.filter(doc => doc.group !== 'input');
+    if (!docs.length) return '';
+    return `<optgroup label="PHASE ${phase.no} ${esc(phase.name)}">${docs.map(doc =>
+      `<option value="${esc(doc.code)}" ${doc.code === selectedCode ? 'selected' : ''}>${esc(doc.code)} · ${esc(doc.name)}</option>`).join('')}</optgroup>`;
+  }).join('');
+  const pendingDown = downstreamOf(selectedCode).filter(code => {
+    const doc = byCode.get(code);
+    return doc && !['已完成', '已批准'].includes(doc.status);
+  });
+  $('#viewSub').textContent = '选一份交付物，查看它依赖谁、谁又依赖它；完整清单见「APQP 阶段管理」。';
   $('#view').innerHTML = `
     <section class="card apqp-rel-panel">
-      <div class="card-h"><div><h3>核心交付物链</h3><span class="hint">需求输入 → 设计与验证 → 过程控制 → 批准量产 → 经验回馈</span></div></div>
+      <div class="card-h"><div><h3>选择交付物</h3><span class="hint">用于判断“改这份文件会影响谁”</span></div></div>
       <div class="card-b">
-        <div class="apqp-rel-flow">
-          ${stages.map((stage, index) => `<section class="apqp-rel-stage">
-            <div class="apqp-rel-stage-head"><span>PHASE ${stage.phase}</span><b>${stage.name}</b></div>
-            <div class="apqp-rel-items">
-              ${stage.codes.map(code => {
-                const doc = byCode.get(code);
-                if (!doc) return '';
-                return `<button class="apqp-rel-item ${doc.kind === 'module' || doc.module === 'pfd' ? 'module' : ''} ${selectedCode === code ? 'selected' : ''}"
-                  data-select-code="${code}" aria-pressed="${selectedCode === code}">
-                  <span class="mono">${code}</span><b>${esc(doc.name)}</b><small>${esc(doc.status)}</small>
-                </button>`;
-              }).join('')}
-            </div>
-            ${index < stages.length - 1 ? '<div class="apqp-rel-next" aria-hidden="true">→</div>' : ''}
-          </section>`).join('')}
+        <div class="apqp-rel-picker">
+          <select id="treeDoc" class="sel">${options}</select>
+          <span class="dim">共 ${all.filter(doc => doc.group !== 'input').length} 份可关联交付物</span>
         </div>
+        ${pendingDown.length ? `<div class="alert warn" style="margin-top:10px"><div>
+          下游有 ${pendingDown.length} 份文件尚未完成：${pendingDown.map(code => esc(nm(code))).join('、')}</div></div>` : ''}
       </div>
     </section>
 
@@ -1416,10 +1412,10 @@ async function vTree() {
       </div>
     </details>`;
 
-  $$('[data-select-code]').forEach(el => el.onclick = () => {
-    state.treeSelectedCode = el.dataset.selectCode;
+  if ($('#treeDoc')) $('#treeDoc').onchange = event => {
+    state.treeSelectedCode = event.target.value;
     vTree();
-  });
+  };
   $$('[data-code]').forEach(el => el.onclick = () => openDocAction(byCode.get(el.dataset.code)));
   if ($('#openSelectedDoc')) $('#openSelectedDoc').onclick = () => openDocAction(selected);
 }
@@ -3863,7 +3859,8 @@ async function vTpl(id) {
 /* ------------------------------------------------------------------ 特性穿透 */
 async function vChars() {
   const list = await api('/chars');
-  $('#viewSub').textContent = '以特性为主线：一个设计特性由多个过程特性共同保证，反查可直达工序、CP 行与监控项';
+  $('#viewSub').textContent = '特性穿透 = 顺着“产品特性 → 过程特性 → 工序 → CP 行 → SPC 监控 / MSA 研究”一路往下看：'
+    + '左边选一个特性，右边就是它在各环节的落点与缺口（红字表示该环节还没覆盖）。';
   if (!state.charId) state.charId = list.find(c => c.char_kind === 'PRODUCT')?.char_id;
 
   $('#view').innerHTML = `
@@ -7808,6 +7805,7 @@ async function vMsaContent() {
   const d = await api('/msa');
   const chars = d.projectChars || [];
   const gauges = d.gauges || [];
+  const otherGauges = d.other_gauges || [];
   const ledgerGauges = gauges.filter(gauge => !gauge.planned_only);
   const planOnlyGauges = gauges.filter(gauge => gauge.planned_only);
   // 可用 = 台账内、非停用/报废、校准未过期（服务端会拒绝停用与过期检具做研究）
@@ -7923,7 +7921,16 @@ async function vMsaContent() {
         </div>
         <div class="card-b" style="border-top:1px solid var(--line2)">
           <button class="btn sm" id="btnAddGauge">＋ 新增检具</button>
-          <span class="dim" style="font-size:11px;margin-left:8px">台账与校准由企业管理部维护；停用/报废/校准过期的检具不能用于研究。</span>
+          <span class="dim" style="font-size:11px;margin-left:8px">台账与校准由企业管理部维护；停用/报废/校准过期的检具不能用于研究。
+            台账是全厂共享主数据，这里只列出本项目已使用或计划使用的检具。</span>
+          ${otherGauges.length ? `<details class="msa-other-gauges">
+            <summary>本厂其他检具（${otherGauges.length} 台，本项目尚未使用）</summary>
+            <div class="msa-other-list">
+              ${otherGauges.map(g => `<button class="chip" title="${esc(g.name || '')}"
+                data-use-other-gauge="${esc(g.gauge_id)}">${esc(g.gauge_id)} ${esc(g.name || '')}</button>`).join('')}
+            </div>
+            <div class="dim" style="font-size:11px">点击可把该检具加入本项目研究（不会改变台账本身）。</div>
+          </details>` : ''}
         </div>
       </div>
       <div class="stack">
@@ -8718,6 +8725,30 @@ async function vMsaContent() {
       $('#gRange').focus();
     }
   });
+  // 把“本厂其他检具”加入本项目研究：选中它作为临时研究设备
+  $$('[data-use-other-gauge]').forEach(button => button.onclick = async () => {
+    const gaugeId = button.dataset.useOtherGauge;
+    if (!$('#mGauge')) return;
+    // 统一走站内确认框：项目禁止浏览器原生 confirm
+    if (gridFilledCount() > 0) {
+      const confirmed = await showConfirmDialog('切换测量设备',
+        '当前数据矩阵已有数据，切换设备会清空已录入的数据。是否继续？',
+        { confirmText: '继续并清空', danger: true });
+      if (!confirmed) return;
+      clearStudyOutputs();
+    }
+    const option = [...$('#mGauge').options].find(item => item.value === gaugeId);
+    if (!option) {
+      // 该检具此前不在本项目列表里，补一个选项再选中
+      const opt = document.createElement('option');
+      opt.value = gaugeId;
+      opt.textContent = button.textContent.trim();
+      $('#mGauge').appendChild(opt);
+    }
+    $('#mGauge').value = gaugeId;
+    $('#mGauge').dispatchEvent(new Event('change'));
+    toast(`研究设备已设为 ${gaugeId}（本项目此前未使用过该检具）`, 'ok');
+  });
   $$('[data-edit-gauge]').forEach(button => button.onclick = async () => {
     const gauge = gauges.find(item => item.gauge_id === button.dataset.editGauge);
     if (!gauge) return;
@@ -9275,10 +9306,18 @@ async function vExports() {
 }
 
 /* ------------------------------------------------------------ 账号与权限 */
+/** 角色默认权限点：只用于把勾选清单预填成角色当前值 */
+function roleDefaultPerms(roles, role) {
+  const def = (roles || []).find(item => item.role === role);
+  return (def && def.permissions) || [];
+}
+
 /** 账号编辑抽屉：新增 / 编辑共用，口径与权限清单一致 */
-function openUserDrawer(user, roles, onSaved) {
+function openUserDrawer(user, roles, onSaved, catalog = {}) {
   const drawer = $('#drawer');
   const isNew = !user;
+  const catalogGroups = catalog.groups || [];
+  const catalogPermissions = catalog.permissions || {};
   const roleOptions = roles.map(item =>
     `<option value="${esc(item.role)}" ${user && user.role === item.role ? 'selected' : ''}>${esc(item.name)}${item.legacy ? '（兼容角色）' : ''} · ${esc(item.department)}</option>`).join('');
   $('.drawer-box', drawer).innerHTML = `
@@ -9303,13 +9342,43 @@ function openUserDrawer(user, roles, onSaved) {
       <div class="row2">
         <div class="field"><label>账号标记（可选）</label>
           <input id="ufFlags" value="${esc(user ? user.flags : '')}" placeholder="facility = 环境与设施编制权"></div>
-        ${isNew ? `<div class="field"><label>初始口令（留空自动生成）</label>
-          <input id="ufPassword" placeholder="至少 10 位"></div>` : `<div class="field"><label>状态</label>
+        ${isNew ? `<div class="field"><label>初始口令（留空用统一初始口令）</label>
+          <input id="ufPassword" placeholder="至少 6 位，留空即用 123456"></div>` : `<div class="field"><label>状态</label>
           <select id="ufStatus">
             <option ${user.status === '启用' ? 'selected' : ''}>启用</option>
             <option ${user.status === '停用' ? 'selected' : ''}>停用</option></select></div>`}
       </div>
       <div class="alert info" id="ufRoleHint"></div>
+
+      <div class="perm-box">
+        <div class="perm-box-head">
+          <div><b>可执行权限</b>
+            <div class="dim" style="font-size:11px">勾选后按账号生效；不勾选任何项则沿用角色默认权限。</div></div>
+          <div class="perm-box-actions">
+            <label class="perm-mode"><input type="checkbox" id="ufCustomPerms"> 自定义</label>
+            <button class="btn sm ghost" id="ufPermAll">全选</button>
+            <button class="btn sm ghost" id="ufPermNone">清空</button>
+            <button class="btn sm ghost" id="ufPermReset">恢复角色默认</button>
+          </div>
+        </div>
+        <div class="perm-groups" id="ufPermGroups">
+          ${(catalogGroups || []).map(group => `
+            <div class="perm-group">
+              <div class="perm-group-head">
+                <label><input type="checkbox" data-perm-group="${esc(group.name)}"> ${esc(group.name)}</label>
+              </div>
+              <div class="perm-group-items">
+                ${group.points.map(point => `
+                  <label class="perm-item">
+                    <input type="checkbox" data-perm-point="${esc(point)}">
+                    <span>${esc(catalogPermissions[point] || point)}</span>
+                    <small class="mono dim">${esc(point)}</small>
+                  </label>`).join('')}
+              </div>
+            </div>`).join('')}
+        </div>
+      </div>
+
       <div class="qt-actions" style="margin-top:12px">
         <button class="btn" id="ufSave">${isNew ? '创建账号' : '保存'}</button>
         <button class="btn ghost" onclick="document.getElementById('drawer').classList.remove('open')">取消</button>
@@ -9326,6 +9395,53 @@ function openUserDrawer(user, roles, onSaved) {
   $('#ufRole').onchange = roleHint;
   roleHint();
 
+  /* ---- 权限勾选 ---- */
+  const permBoxes = () => $$('#ufPermGroups input[data-perm-point]');
+  const syncGroupBoxes = () => {
+    $$('#ufPermGroups input[data-perm-group]').forEach(box => {
+      const group = catalogGroups.find(item => item.name === box.dataset.permGroup);
+      const boxes = group ? group.points.map(point => $(`#ufPermGroups input[data-perm-point="${point}"]`)).filter(Boolean) : [];
+      const checked = boxes.filter(item => item.checked).length;
+      box.checked = boxes.length > 0 && checked === boxes.length;
+      box.indeterminate = checked > 0 && checked < boxes.length;
+    });
+  };
+  const applyPerms = perms => {
+    const set = new Set(perms || []);
+    permBoxes().forEach(box => { box.checked = set.has(box.dataset.permPoint); });
+    syncGroupBoxes();
+  };
+  // 已有账号：有自定义权限就勾选并进入“自定义”，否则展示角色默认值（只读参考）
+  const custom = Array.isArray(user?.perms) ? user.perms : null;
+  $('#ufCustomPerms').checked = !!custom;
+  applyPerms(custom || roleDefaultPerms(roles, user ? user.role : ($('#ufRole') || {}).value));
+  // 勾选始终可点；第一次手动改动就自动切到“自定义”，不必先去找那个开关
+  const markCustom = () => { $('#ufCustomPerms').checked = true; };
+  $('#ufCustomPerms').onchange = () => {
+    if (!$('#ufCustomPerms').checked) applyPerms(roleDefaultPerms(roles, $('#ufRole').value));
+  };
+  $('#ufRole').addEventListener('change', () => {
+    if (!$('#ufCustomPerms').checked) applyPerms(roleDefaultPerms(roles, $('#ufRole').value));
+  });
+  $('#ufPermAll').onclick = () => { markCustom(); permBoxes().forEach(box => { box.checked = true; }); syncGroupBoxes(); };
+  $('#ufPermNone').onclick = () => { markCustom(); permBoxes().forEach(box => { box.checked = false; }); syncGroupBoxes(); };
+  $('#ufPermReset').onclick = () => {
+    $('#ufCustomPerms').checked = false;
+    applyPerms(roleDefaultPerms(roles, $('#ufRole').value));
+  };
+  permBoxes().forEach(box => box.onchange = () => { markCustom(); syncGroupBoxes(); });
+  $$('#ufPermGroups input[data-perm-group]').forEach(groupBox => {
+    groupBox.onchange = () => {
+      markCustom();
+      const group = catalogGroups.find(item => item.name === groupBox.dataset.permGroup);
+      (group ? group.points : []).forEach(point => {
+        const box = $(`#ufPermGroups input[data-perm-point="${point}"]`);
+        if (box) box.checked = groupBox.checked;
+      });
+      syncGroupBoxes();
+    };
+  });
+
   $('#ufSave').onclick = async () => {
     const body = {
       display_name: $('#ufName').value.trim(),
@@ -9333,6 +9449,10 @@ function openUserDrawer(user, roles, onSaved) {
       department: $('#ufDept').value.trim(),
       position: $('#ufPosition').value.trim(),
       flags: $('#ufFlags').value.trim(),
+      // 未勾“自定义”时传 null，表示按角色默认
+      perms: $('#ufCustomPerms').checked
+        ? permBoxes().filter(box => box.checked).map(box => box.dataset.permPoint)
+        : null,
     };
     try {
       if (isNew) {
@@ -9342,9 +9462,7 @@ function openUserDrawer(user, roles, onSaved) {
           method: 'POST', body: { ...body, username, password: password || undefined },
         });
         drawer.classList.remove('open');
-        toast(result.initial_password
-          ? `账号 ${result.username} 已创建；初始口令：${result.initial_password}（仅显示一次）`
-          : `账号 ${result.username} 已创建`, 'ok');
+        toast(`账号 ${result.username} 已创建；初始口令：${result.initial_password}，首次登录需改密`, 'ok');
       } else {
         await api('/admin/users/' + encodeURIComponent(user.user_id), {
           method: 'PATCH', body: { ...body, status: $('#ufStatus').value },
@@ -9364,63 +9482,104 @@ async function vUsers() {
   }
   const [data, catalog] = await Promise.all([api('/admin/users'), api('/admin/roles')]);
   const roles = catalog.list || [];
-  $('#viewSub').textContent = '按组织架构维护部门 / 岗位 / 角色；停用账号立即失效，重置口令后强制下次登录修改。';
-  const grouped = {};
-  (data.list || []).forEach(user => {
-    const key = user.department || '未分配部门';
-    (grouped[key] = grouped[key] || []).push(user);
-  });
+  $('#viewSub').textContent = '按部门维护账号；可逐项勾选每个账号能执行的操作，不勾选则沿用角色默认。';
+  const users = (data.list || []).slice();
+  const departments = [...new Set(users.map(user => user.department || '未分配部门'))].sort();
+  state.userFilter = state.userFilter || { q: '', dept: '' };
+
+  const permSummary = user => {
+    if (Array.isArray(user.perms)) {
+      return `<span class="badge b-ok">自定义 ${user.perms.length} 项</span>`;
+    }
+    const def = roles.find(item => item.role === user.role);
+    return `<span class="dim">按角色 · ${def ? def.permission_count : 0} 项</span>`;
+  };
+
+  const renderRows = () => {
+    const q = state.userFilter.q.trim().toLowerCase();
+    const dept = state.userFilter.dept;
+    const list = users.filter(user => (!dept || (user.department || '未分配部门') === dept)
+      && (!q || `${user.username} ${user.display_name} ${user.position || ''} ${user.role_name}`.toLowerCase().includes(q)));
+    const tbody = $('#userRows');
+    if (!tbody) return;
+    // 部门并入姓名单元格：单表 6 列才能在中等宽度下不横向滚动
+    tbody.innerHTML = list.map(user => `<tr>
+      <td class="mono nowrap">${esc(user.username)}</td>
+      <td>${esc(user.display_name)}
+        <div class="dim">${esc([user.department, user.position].filter(Boolean).join(' · ') || '—')}</div></td>
+      <td class="nowrap">${esc(user.role_name)}${user.flags ? `<div class="dim">标记：${esc(user.flags)}</div>` : ''}</td>
+      <td class="nowrap">${permSummary(user)}</td>
+      <td class="nowrap">${user.status === '启用' ? '<span class="badge b-green">启用</span>' : '<span class="badge b-gray">停用</span>'}
+        ${user.must_change_password ? '<div style="margin-top:3px"><span class="badge b-warn">待改密</span></div>' : ''}</td>
+      <td class="nowrap">
+        <button class="btn sm ghost" data-user-edit="${esc(user.user_id)}">编辑</button>
+        <button class="btn sm ghost" data-user-reset="${esc(user.user_id)}">重置口令</button>
+      </td></tr>`).join('') || '<tr><td colspan="6" class="dim">没有匹配的账号</td></tr>';
+    bindRowActions();
+  };
+  const bindRowActions = () => {
+    $$('[data-user-edit]').forEach(button => button.onclick = () => {
+      const user = users.find(item => item.user_id === button.dataset.userEdit);
+      if (user) openUserDrawer(user, roles, vUsers, catalog);
+    });
+    $$('[data-user-reset]').forEach(button => button.onclick = async () => {
+      const user = users.find(item => item.user_id === button.dataset.userReset);
+      if (!user) return;
+      const ok = await showConfirmDialog('重置登录口令',
+        `将把 ${user.username} 的口令重置为「${catalog.default_password || '123456'}」，`
+        + '其所有会话立即失效，下次登录必须修改口令。',
+        { confirmText: '确认重置' });
+      if (!ok) return;
+      try {
+        const result = await api(`/admin/users/${encodeURIComponent(user.user_id)}/reset-password`, {
+          method: 'POST', body: {},
+        });
+        toast(`口令已重置为 ${result.initial_password}`, 'ok');
+        vUsers();
+      } catch (error) { toast(error.message, 'err'); }
+    });
+  };
+
   $('#view').innerHTML = `
     <div class="pfd-commandbar">
       <div><h2>账号与权限</h2></div>
-      <div style="display:flex;gap:8px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" id="btnRoleMatrix">角色权限说明</button>
         <button class="btn" id="btnNewUser">＋ 新增账号</button>
       </div>
     </div>
     <div class="alert info" style="margin-bottom:12px">
-      所有账号都可以查看全部页面；写操作按岗位授权，交付物按目录归属校验编制岗位。
+      所有账号都能查看全部页面；写操作按下列勾选授权，交付物还按目录归属校验编制岗位。
       管理层与内审员全局可见，其余账号只能访问所参与的项目。
     </div>
-    ${Object.entries(grouped).map(([department, users]) => `
-      <div class="card" style="margin-bottom:12px">
-        <div class="card-h"><h3>${esc(department)}</h3><span class="hint">${users.length} 个账号</span></div>
-        <div class="t-scroll"><table class="t user-table"><thead><tr>
-          <th>登录名</th><th>姓名 / 岗位</th><th>角色</th><th>状态</th><th>操作</th>
-        </tr></thead><tbody>
-          ${users.map(user => `<tr>
-            <td class="mono">${esc(user.username)}</td>
-            <td>${esc(user.display_name)}<div class="dim">${esc(user.position || '—')}</div></td>
-            <td>${esc(user.role_name)}${user.flags ? `<div class="dim">标记：${esc(user.flags)}</div>` : ''}</td>
-            <td class="nowrap">${user.status === '启用' ? '<span class="badge b-green">启用</span>' : '<span class="badge b-gray">停用</span>'}
-              ${user.must_change_password ? '<div style="margin-top:3px"><span class="badge b-warn">待改密</span></div>' : ''}</td>
-            <td class="nowrap">
-              <button class="btn sm ghost" data-user-edit="${esc(user.user_id)}">编辑</button>
-              <button class="btn sm ghost" data-user-reset="${esc(user.user_id)}">重置口令</button>
-            </td></tr>`).join('')}
-        </tbody></table></div>
-      </div>`).join('')}`;
+    <div class="card">
+      <div class="card-h user-toolbar">
+        <h3>全部账号 <span class="dim" style="font-weight:400">${users.length} 个</span></h3>
+        <div class="user-toolbar-filters">
+          <input id="userSearch" class="sel" placeholder="搜索登录名 / 姓名 / 岗位" value="${esc(state.userFilter.q)}">
+          <select id="userDept" class="sel">
+            <option value="">全部部门</option>
+            ${departments.map(name => `<option ${state.userFilter.dept === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      <div class="user-table-wrap">
+        <table class="t user-table"><thead><tr>
+          <th>登录名</th><th>姓名 / 部门 · 岗位</th><th>角色</th><th>权限</th><th>状态</th><th>操作</th>
+        </tr></thead><tbody id="userRows"></tbody></table>
+      </div>
+    </div>`;
+  renderRows();
+  $('#userSearch').oninput = event => {
+    state.userFilter.q = event.target.value;
+    renderRows();
+  };
+  $('#userDept').onchange = event => {
+    state.userFilter.dept = event.target.value;
+    renderRows();
+  };
 
-  $('#btnNewUser').onclick = () => openUserDrawer(null, roles, vUsers);
-  $$('[data-user-edit]').forEach(button => button.onclick = () => {
-    const user = (data.list || []).find(item => item.user_id === button.dataset.userEdit);
-    if (user) openUserDrawer(user, roles, vUsers);
-  });
-  $$('[data-user-reset]').forEach(button => button.onclick = async () => {
-    const user = (data.list || []).find(item => item.user_id === button.dataset.userReset);
-    if (!user) return;
-    const ok = await showConfirmDialog('重置登录口令',
-      `将重置 ${user.username} 的口令并让其所有会话立即失效，用户下次登录必须修改口令。`,
-      { confirmText: '确认重置' });
-    if (!ok) return;
-    try {
-      const result = await api(`/admin/users/${encodeURIComponent(user.user_id)}/reset-password`, {
-        method: 'POST', body: {},
-      });
-      toast(`新口令：${result.initial_password}（仅显示一次）`, 'ok');
-      vUsers();
-    } catch (error) { toast(error.message, 'err'); }
-  });
+  $('#btnNewUser').onclick = () => openUserDrawer(null, roles, vUsers, catalog);
 
   $('#btnRoleMatrix').onclick = () => {
     const perms = catalog.permissions || {};
@@ -9491,11 +9650,11 @@ async function openChangePassword(forced = false) {
     description: '一次性口令会一直留在初始口令文件里，请改成只有你知道的口令。',
     fields: [
       { key: 'current_password', label: '当前口令', type: 'password', required: true },
-      { key: 'new_password', label: '新口令（至少 10 位）', type: 'password', required: true },
+      { key: 'new_password', label: '新口令（至少 6 位，不能用初始口令）', type: 'password', required: true },
       { key: 'confirm', label: '再输一次新口令', type: 'password', required: true },
     ],
     confirmText: '保存口令',
-    validate: v => v.new_password.length < 10 ? '新口令至少 10 位'
+    validate: v => v.new_password.length < 6 ? '新口令至少 6 位'
       : v.new_password !== v.confirm ? '两次输入的新口令不一致'
         : v.new_password === v.current_password ? '新口令不能与当前口令相同' : '',
   });
@@ -10254,6 +10413,13 @@ async function vCharDict() {
     </td></tr>`;
 
   $('#view').innerHTML = `
+    <div class="alert info" style="margin-bottom:12px"><div>
+      <b>「来源类型 / 来源引用」是什么：</b>说明这个特性是<b>凭什么</b>定下来的，用于追溯与审核。
+      来源类型是你选的一类依据（客户图纸、客户规范、AEC-Q200、内部试验…）；
+      来源引用是那份依据的具体编号，可以直接从已有资料里挑：
+      客户图纸号、国标/IEC 条款号、内部试验编号（DOE/PV）、或某份交付物（如 P1-06）、某个 ECR 编号。
+      两栏都在本页直接填写，也可由 P1-11 / P2-11 交付物同步带入；留空表示来源待补充。
+    </div></div>
     <div class="card">
       <div class="card-h"><h3>特性主数据</h3>
         <span class="hint">共 ${list.length} 条 · 单元格可直接编辑
@@ -10263,7 +10429,9 @@ async function vCharDict() {
       <div style="overflow:auto">
       <table class="t" style="min-width:1650px"><thead><tr>
         <th style="width:110px">编号</th><th style="width:160px">名称</th><th style="width:180px">简明描述</th><th style="width:88px">类型</th><th style="width:150px">适用范围</th>
-        <th>目标值</th><th>单位</th><th>下限</th><th>上限</th><th>公差文本</th><th>特殊特性</th><th>特性域</th><th>来源类型</th><th>来源引用</th><th>操作</th>
+        <th>目标值</th><th>单位</th><th>下限</th><th>上限</th><th>公差文本</th><th>特殊特性</th><th>特性域</th>
+        <th title="依据的类别：客户图纸 / 客户规范 / AEC-Q200 / 内部试验等">来源类型</th>
+        <th title="依据的具体编号：图纸号、条款号、试验编号、交付物编号或 ECR 编号">来源引用</th><th>操作</th>
       </tr></thead><tbody>
         ${list.map(row).join('')}
       </tbody></table></div>

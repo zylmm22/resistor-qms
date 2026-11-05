@@ -154,13 +154,20 @@ assert.match(app, /该检具对应计划 .* 正在研究中|正在研究中/, 'M
 assert.match(app, /study\.status !== '作废' && !study\.source_invalid/, 'MSA：作废/失效研究不出现在导出下拉');
 assert.match(app, /该计划尚未维护公差/, 'MSA：计划缺公差时允许补填');
 assert.match(app, /await vMsa\(\);\s*\n\s*if \(\$\('#mResult'\)\)/, 'MSA：计算后刷新计划表与历史');
-checks += 22;
+checks += 28;
 
 /* ------------------------------- 人员权限（2026-11-05 组织架构） */
 assert.match(app, /function vUsers\(/, '权限：提供账号与权限页');
 assert.match(app, /function openUserDrawer\(/, '权限：账号新增/编辑抽屉存在');
 assert.match(app, /perm: 'user\.manage'/, '权限：账号页仅管理员可见');
 assert.match(app, /d\.meta\.can_edit/, '权限：交付物按钮按当前账号归属隐藏');
+// 账号权限：逐项勾选 + 单一账号表（旧版按部门拆表，窄屏各自横滚看起来错乱）
+assert.match(app, /id="ufPermGroups"/, '账号：提供权限勾选清单');
+assert.match(app, /data-perm-point=/, '账号：权限点可逐项勾选');
+assert.match(app, /id="ufCustomPerms"/, '账号：可切换按角色默认/自定义');
+assert.match(app, /id="userSearch"/, '账号：提供搜索框');
+assert.match(css, /\.perm-group-items\{display:grid/, '账号：权限清单网格样式存在');
+assert.match(css, /\.user-table-wrap\{overflow:auto/, '账号：账号表单一容器内滚动');
 assert.match(server, /requirePermission\('doc\.approve'/, '权限：交付物批准改按权限点');
 assert.match(server, /assertDocApprovable\(code\)/, '权限：副总审批受分管板块约束');
 // MSA 拆成「台账与校准」（企管部）与「研究设计与数据」（质量部）两个页签

@@ -75,7 +75,9 @@ async function main() {
     const char = (msa.json.projectChars || []).find(item => item.lsl != null && item.usl != null);
     assert.ok(char, '前置条件：项目应有带规范限的特性');
     const today = new Date().toISOString().slice(0, 10);
-    const gauge = (msa.json.gauges || []).find(item => item.calibration_due && item.calibration_due >= today);
+    // 检具列表现在是“本项目已使用/计划使用”的子集；新项目可能为空，回退到全厂台账再补计划
+    const gaugePool = [...(msa.json.gauges || []), ...(msa.json.other_gauges || [])];
+    const gauge = gaugePool.find(item => item.calibration_due && item.calibration_due >= today);
     assert.ok(gauge, '前置条件：应有校准有效的检具');
 
     const parts = 10, ops = 3, trials = 3;

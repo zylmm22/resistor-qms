@@ -1337,6 +1337,40 @@ details.sec.drawing-list>summary{font-size:13px;font-weight:700;color:var(--navy
 .t-scroll{overflow-x:auto;min-width:0;max-width:100%;-webkit-overflow-scrolling:touch}
 table.t thead th{position:sticky;top:0;z-index:2}
 table.t.user-table{min-width:720px}
+/* 账号页：单表 + 固定表头，不再按部门拆成多张小表（窄屏下会各自横向滚动，看起来错乱） */
+.user-table-wrap{overflow:auto;max-height:calc(100vh - 320px)}
+.user-table-wrap table.t thead th{position:sticky;top:0;z-index:2}
+/* 操作列吸附右缘：表宽于容器时按钮仍可见 */
+.user-table-wrap table.t th:last-child{position:sticky;right:0;z-index:3;background:#F6F8FB;box-shadow:inset 1px 0 0 var(--line2)}
+.user-table-wrap table.t td:last-child{position:sticky;right:0;background:#fff;box-shadow:inset 1px 0 0 var(--line2)}
+.user-table-wrap table.t tbody tr:hover td:last-child{background:#F8FAFD}
+.user-toolbar{flex-wrap:wrap;gap:10px}
+.user-toolbar-filters{display:flex;gap:8px;flex-wrap:wrap}
+.user-toolbar-filters .sel{min-width:180px}
+
+/* 权限勾选清单 */
+.perm-box{margin-top:14px;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.perm-box-head{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;
+  padding:11px 13px;background:#F7F9FC;border-bottom:1px solid var(--line2)}
+.perm-box-head b{font-size:12.5px;color:var(--navy)}
+.perm-box-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.perm-mode{display:inline-flex;align-items:center;gap:5px;font-size:12px;color:var(--ink2);cursor:pointer}
+.perm-groups{padding:10px 13px 14px;max-height:340px;overflow:auto;display:grid;gap:12px}
+.perm-group-head{font-size:11.5px;font-weight:700;color:var(--ink2);margin-bottom:5px}
+.perm-group-head label{display:inline-flex;align-items:center;gap:6px;cursor:pointer}
+.perm-group-items{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:4px 10px}
+.perm-item{display:grid;grid-template-columns:auto minmax(0,1fr);align-items:center;gap:6px;
+  padding:4px 6px;border-radius:5px;cursor:pointer;font-size:11.5px;color:var(--ink2)}
+.perm-item:hover{background:#F4F7FB}
+.perm-item small{grid-column:2;font-size:10px;color:var(--ink3)}
+.perm-item input:disabled+span{color:var(--ink3)}
+
+/* 交付物影响分析：交付物选择器 */
+.apqp-rel-picker{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.apqp-rel-picker .sel{min-width:280px;max-width:100%}
+.msa-other-gauges{margin-top:8px;font-size:11.5px}
+.msa-other-gauges summary{cursor:pointer;color:var(--ink2)}
+.msa-other-list{display:flex;flex-wrap:wrap;gap:5px;margin:7px 0 5px}
 @media (max-width:900px){
   .card-b,.drawer-b,.view{max-width:100%}
   .card-b{overflow-x:auto}
