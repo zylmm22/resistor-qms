@@ -201,7 +201,7 @@ const NAV = [
   { g: '审计与系统维护' },
   { id: 'exports', t: '导出审计' },
   { id: 'users', t: '账号与权限', perm: 'user.manage' },
-  { id: 'backups', t: '数据库备份' },
+  { id: 'backups', t: '数据库备份', perm: 'backup.manage' },
 ];
 const APQP_NAV_PHASES = [
   { no: 0, name: '入门' },
@@ -7877,6 +7877,17 @@ async function vMsaContent() {
   // 权限：企管部计量岗维护台账与校准，质量部做研究设计与数据
   const canEditGauge = userCan('msa.gauge.edit');
   const canStudy = userCan('msa.edit');
+  // 本厂其他检具：台账页与研究设计页共用同一份折叠清单，
+  // 否则“没有台账权限 + 新项目零检具”的账号（如检验员）无法开展研究
+  const otherGaugePicker = () => (otherGauges.length ? `
+    <details class="msa-other-gauges" ${ledgerGauges.length ? '' : 'open'}>
+      <summary>本厂其他检具（${otherGauges.length} 台，本项目尚未使用）</summary>
+      <div class="msa-other-list">
+        ${otherGauges.map(g => `<button class="chip" title="${esc(g.name || '')}"
+          data-use-other-gauge="${esc(g.gauge_id)}">${esc(g.gauge_id)} ${esc(g.name || '')}</button>`).join('')}
+      </div>
+      <div class="dim" style="font-size:11px">点击可把该检具加入本项目研究（不会改变台账本身）。</div>
+    </details>` : '');
   // 默认页签跟随岗位：只有台账权限的账号直接落在台账页，其余落在研究页
   const defaultTab = canStudy ? 'study' : (canEditGauge ? 'ledger' : 'study');
   const currentTab = state.msaTab === 'ledger' ? (canEditGauge ? 'ledger' : 'study')
@@ -7923,14 +7934,7 @@ async function vMsaContent() {
           <button class="btn sm" id="btnAddGauge">＋ 新增检具</button>
           <span class="dim" style="font-size:11px;margin-left:8px">台账与校准由企业管理部维护；停用/报废/校准过期的检具不能用于研究。
             台账是全厂共享主数据，这里只列出本项目已使用或计划使用的检具。</span>
-          ${otherGauges.length ? `<details class="msa-other-gauges">
-            <summary>本厂其他检具（${otherGauges.length} 台，本项目尚未使用）</summary>
-            <div class="msa-other-list">
-              ${otherGauges.map(g => `<button class="chip" title="${esc(g.name || '')}"
-                data-use-other-gauge="${esc(g.gauge_id)}">${esc(g.gauge_id)} ${esc(g.name || '')}</button>`).join('')}
-            </div>
-            <div class="dim" style="font-size:11px">点击可把该检具加入本项目研究（不会改变台账本身）。</div>
-          </details>` : ''}
+          ${otherGaugePicker()}
         </div>
       </div>
       <div class="stack">
@@ -8077,7 +8081,8 @@ async function vMsaContent() {
             <div class="field"><label>检具 / 测量设备</label><select id="mGauge">
               ${ledgerGauges.filter(g => g.status !== '报废').map(g =>
                 `<option value="${esc(g.gauge_id)}" ${g.calibration_warning ? 'data-warning="1"' : ''}>${esc(g.gauge_id)} ${esc(g.name)}${g.calibration_warning ? '（校准过期/停用）' : ''}</option>`).join('')}
-            </select><div class="dim" id="mGaugeHint"></div></div>
+            </select><div class="dim" id="mGaugeHint"></div>
+              ${canStudy && !canEditGauge ? otherGaugePicker() : ''}</div>
             <div class="field"><label>容差</label><input id="mTol" type="number" min="0" step="any" value="${toleranceFor(defaultChar)}"></div>
             <div class="field"><label>零件数</label><input id="mParts" type="number" min="2" max="10" value="10"></div>
             <div class="field"><label>评价人数</label><input id="mOps" type="number" min="2" max="4" value="3"></div>
@@ -8239,11 +8244,15 @@ async function vMsaContent() {
       el.textContent = gaugeStudyText(el.dataset.gaugeStudy, char?.pchar_id, planId);
     });
     // 当前选中的检具若校准过期/停用，直接在研究设计里提示（服务端会拒绝保存）
+    // “本厂其他检具”不在 ledgerGauges 里，改看选项上带的 data-warning
     const hint = $('#mGaugeHint');
     if (hint) {
-      const gauge = ledgerGauges.find(item => item.gauge_id === $('#mGauge')?.value);
-      hint.textContent = gauge && gauge.calibration_warning
-        ? `该检具${['停用', '报废'].includes(gauge.status) ? `为“${gauge.status}”` : '校准已过期'}，服务端会拒绝保存研究；请先维护校准状态。`
+      const selectedId = $('#mGauge')?.value;
+      const gauge = [...ledgerGauges, ...otherGauges].find(item => item.gauge_id === selectedId);
+      const flagged = gauge ? gauge.calibration_warning
+        : !!$('#mGauge')?.selectedOptions?.[0]?.dataset.warning;
+      hint.textContent = flagged
+        ? `该检具${gauge && ['停用', '报废'].includes(gauge.status) ? `为“${gauge.status}”` : '校准已过期或未维护'}，服务端会拒绝保存研究；请先维护校准状态。`
         : '';
     }
   };
@@ -8423,7 +8432,7 @@ async function vMsaContent() {
     let lastGaugeId = $('#mGauge').value;
     $('#mGauge').onchange = async () => {
       const chosen = $('#mGauge').value;
-      const gauge = ledgerGauges.find(item => item.gauge_id === chosen);
+      const gauge = [...ledgerGauges, ...otherGauges].find(item => item.gauge_id === chosen);
       const proceed = await switchContext(
         `测量设备改为 ${gauge ? `${gauge.gauge_id} ${gauge.name || ''}` : '未选择'}`, () => {});
       if (!proceed) { $('#mGauge').value = lastGaugeId; return; }
@@ -8737,16 +8746,21 @@ async function vMsaContent() {
       if (!confirmed) return;
       clearStudyOutputs();
     }
+    const other = otherGauges.find(item => item.gauge_id === gaugeId) || {};
     const option = [...$('#mGauge').options].find(item => item.value === gaugeId);
     if (!option) {
-      // 该检具此前不在本项目列表里，补一个选项再选中
+      // 该检具此前不在本项目列表里，补一个选项再选中；校准状态随选项带过去，提示才能显示
       const opt = document.createElement('option');
       opt.value = gaugeId;
-      opt.textContent = button.textContent.trim();
+      opt.textContent = `${gaugeId} ${other.name || ''}${other.calibration_warning ? '（校准过期/停用）' : ''}`.trim();
+      if (other.calibration_warning) opt.dataset.warning = '1';
       $('#mGauge').appendChild(opt);
     }
     $('#mGauge').value = gaugeId;
     $('#mGauge').dispatchEvent(new Event('change'));
+    // 本项目原本没有任何可用检具时“计算 GR&R”是禁用的；选中后必须放开，否则走不到计算
+    if ($('#mRun') && chars.length) $('#mRun').disabled = false;
+    $('#mGauge').scrollIntoView({ behavior: 'smooth', block: 'center' });
     toast(`研究设备已设为 ${gaugeId}（本项目此前未使用过该检具）`, 'ok');
   });
   $$('[data-edit-gauge]').forEach(button => button.onclick = async () => {
@@ -9353,7 +9367,7 @@ function openUserDrawer(user, roles, onSaved, catalog = {}) {
       <div class="perm-box">
         <div class="perm-box-head">
           <div><b>可执行权限</b>
-            <div class="dim" style="font-size:11px">勾选后按账号生效；不勾选任何项则沿用角色默认权限。</div></div>
+            <div class="dim" id="ufPermMode">按角色默认</div></div>
           <div class="perm-box-actions">
             <label class="perm-mode"><input type="checkbox" id="ufCustomPerms"> 自定义</label>
             <button class="btn sm ghost" id="ufPermAll">全选</button>
@@ -9363,16 +9377,17 @@ function openUserDrawer(user, roles, onSaved, catalog = {}) {
         </div>
         <div class="perm-groups" id="ufPermGroups">
           ${(catalogGroups || []).map(group => `
-            <div class="perm-group">
+            <div class="perm-group" data-group="${esc(group.name)}">
               <div class="perm-group-head">
                 <label><input type="checkbox" data-perm-group="${esc(group.name)}"> ${esc(group.name)}</label>
+                <span class="perm-group-count">0/${group.points.length}</span>
               </div>
               <div class="perm-group-items">
                 ${group.points.map(point => `
                   <label class="perm-item">
                     <input type="checkbox" data-perm-point="${esc(point)}">
                     <span>${esc(catalogPermissions[point] || point)}</span>
-                    <small class="mono dim">${esc(point)}</small>
+                    <small class="mono" title="${esc(point)}">${esc(point)}</small>
                   </label>`).join('')}
               </div>
             </div>`).join('')}
@@ -9396,38 +9411,64 @@ function openUserDrawer(user, roles, onSaved, catalog = {}) {
   roleHint();
 
   /* ---- 权限勾选 ---- */
+  // 管理员恒为全权：勾选不参与判定；锁状态随角色下拉实时切换（新增账号时角色也可能是 admin）
+  const isAdminAccount = () => $('#ufRole').value === 'admin';
   const permBoxes = () => $$('#ufPermGroups input[data-perm-point]');
+  /** 角色默认权限 + 账号标记带来的权限（facility 标记 = 环境与设施编制权） */
+  const defaultPerms = role => {
+    const list = [...roleDefaultPerms(roles, role)];
+    if (/\bfacility\b/.test(($('#ufFlags')?.value || '').trim())) list.push('facility.edit');
+    return [...new Set(list)];
+  };
   const syncGroupBoxes = () => {
-    $$('#ufPermGroups input[data-perm-group]').forEach(box => {
-      const group = catalogGroups.find(item => item.name === box.dataset.permGroup);
-      const boxes = group ? group.points.map(point => $(`#ufPermGroups input[data-perm-point="${point}"]`)).filter(Boolean) : [];
-      const checked = boxes.filter(item => item.checked).length;
-      box.checked = boxes.length > 0 && checked === boxes.length;
-      box.indeterminate = checked > 0 && checked < boxes.length;
+    $$('#ufPermGroups .perm-group').forEach(card => {
+      const boxes = $$('input[data-perm-point]', card);
+      const checked = boxes.filter(box => box.checked).length;
+      const groupBox = $('input[data-perm-group]', card);
+      if (groupBox) {
+        groupBox.checked = boxes.length > 0 && checked === boxes.length;
+        groupBox.indeterminate = checked > 0 && checked < boxes.length;
+      }
+      card.classList.toggle('done', boxes.length > 0 && checked === boxes.length);
+      const count = $('.perm-group-count', card);
+      if (count) count.textContent = `${checked}/${boxes.length}`;
     });
+    permBoxes().forEach(box => box.closest('.perm-item')?.classList.toggle('on', box.checked));
+    const total = permBoxes().filter(box => box.checked).length;
+    const mode = $('#ufPermMode');
+    if (mode) {
+      mode.textContent = isAdminAccount() ? '管理员账号始终拥有全部权限，勾选仅作参考'
+        : $('#ufCustomPerms').checked ? `自定义：已勾选 ${total} 项，完全替代角色默认`
+          : `按角色默认：${total} 项（改动任意一项即转为自定义）`;
+    }
   };
   const applyPerms = perms => {
     const set = new Set(perms || []);
     permBoxes().forEach(box => { box.checked = set.has(box.dataset.permPoint); });
     syncGroupBoxes();
   };
-  // 已有账号：有自定义权限就勾选并进入“自定义”，否则展示角色默认值（只读参考）
+  // 已有账号：有自定义权限就勾选并进入“自定义”，否则展示角色默认值
   const custom = Array.isArray(user?.perms) ? user.perms : null;
   $('#ufCustomPerms').checked = !!custom;
-  applyPerms(custom || roleDefaultPerms(roles, user ? user.role : ($('#ufRole') || {}).value));
+  applyPerms(custom || defaultPerms(user ? user.role : $('#ufRole').value));
   // 勾选始终可点；第一次手动改动就自动切到“自定义”，不必先去找那个开关
   const markCustom = () => { $('#ufCustomPerms').checked = true; };
   $('#ufCustomPerms').onchange = () => {
-    if (!$('#ufCustomPerms').checked) applyPerms(roleDefaultPerms(roles, $('#ufRole').value));
+    if (!$('#ufCustomPerms').checked) applyPerms(defaultPerms($('#ufRole').value));
+    syncGroupBoxes();
   };
   $('#ufRole').addEventListener('change', () => {
-    if (!$('#ufCustomPerms').checked) applyPerms(roleDefaultPerms(roles, $('#ufRole').value));
+    if (!$('#ufCustomPerms').checked) applyPerms(defaultPerms($('#ufRole').value));
+  });
+  // facility 标记会额外带来「维护环境与设施」：标记改动后同步默认勾选
+  $('#ufFlags')?.addEventListener('change', () => {
+    if (!$('#ufCustomPerms').checked) applyPerms(defaultPerms($('#ufRole').value));
   });
   $('#ufPermAll').onclick = () => { markCustom(); permBoxes().forEach(box => { box.checked = true; }); syncGroupBoxes(); };
   $('#ufPermNone').onclick = () => { markCustom(); permBoxes().forEach(box => { box.checked = false; }); syncGroupBoxes(); };
   $('#ufPermReset').onclick = () => {
     $('#ufCustomPerms').checked = false;
-    applyPerms(roleDefaultPerms(roles, $('#ufRole').value));
+    applyPerms(defaultPerms($('#ufRole').value));
   };
   permBoxes().forEach(box => box.onchange = () => { markCustom(); syncGroupBoxes(); });
   $$('#ufPermGroups input[data-perm-group]').forEach(groupBox => {
@@ -9441,6 +9482,21 @@ function openUserDrawer(user, roles, onSaved, catalog = {}) {
       syncGroupBoxes();
     };
   });
+  // 管理员恒为全权：勾选不参与判定，禁用并说明，避免管理员误以为限制了超管
+  const applyAdminLock = () => {
+    const locked = isAdminAccount();
+    permBoxes().forEach(box => { box.disabled = locked; });
+    $$('#ufPermGroups input[data-perm-group]').forEach(box => { box.disabled = locked; });
+    ['#ufPermAll', '#ufPermNone', '#ufPermReset', '#ufCustomPerms'].forEach(selector => {
+      const el = $(selector);
+      if (el) el.disabled = locked;
+    });
+    $('#ufPermGroups')?.classList.toggle('perm-locked', locked);
+    if (locked) $('#ufCustomPerms').checked = false;
+    syncGroupBoxes();
+  };
+  $('#ufRole').addEventListener('change', applyAdminLock);
+  applyAdminLock();
 
   $('#ufSave').onclick = async () => {
     const body = {
@@ -9449,8 +9505,8 @@ function openUserDrawer(user, roles, onSaved, catalog = {}) {
       department: $('#ufDept').value.trim(),
       position: $('#ufPosition').value.trim(),
       flags: $('#ufFlags').value.trim(),
-      // 未勾“自定义”时传 null，表示按角色默认
-      perms: $('#ufCustomPerms').checked
+      // 未勾“自定义”时传 null，表示按角色默认；管理员恒为全权，不写自定义清单
+      perms: !isAdminAccount() && $('#ufCustomPerms').checked
         ? permBoxes().filter(box => box.checked).map(box => box.dataset.permPoint)
         : null,
     };
@@ -9488,6 +9544,7 @@ async function vUsers() {
   state.userFilter = state.userFilter || { q: '', dept: '' };
 
   const permSummary = user => {
+    if (user.role === 'admin') return '<span class="badge b-ok">管理员全权</span>';
     if (Array.isArray(user.perms)) {
       return `<span class="badge b-ok">自定义 ${user.perms.length} 项</span>`;
     }
@@ -9542,7 +9599,7 @@ async function vUsers() {
 
   $('#view').innerHTML = `
     <div class="pfd-commandbar">
-      <div><h2>账号与权限</h2></div>
+      <div class="dim" style="font-size:12px;line-height:1.6">共 ${users.length} 个账号 · 编辑账号可逐项勾选权限，改动即时生效</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn ghost" id="btnRoleMatrix">角色权限说明</button>
         <button class="btn" id="btnNewUser">＋ 新增账号</button>

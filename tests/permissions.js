@@ -319,12 +319,27 @@ async function main() {
     assert.deepEqual(afterChange.user.permissions.sort(), ['doc.approve', 'doc.edit'],
       '账号级权限应覆盖角色默认，而不是并集');
 
+    // 服务端必须真的按勾选放行/拦截：勾选里没有 msa.gauge.edit，写检具台账就要 403
+    cookies.quality = customCookie;
+    const gaugeDenied = await api('POST', '/gauges', {
+      as: 'quality', body: { code: 'G-PERM-01', name: '权限验收检具' },
+    });
+    assert.equal(gaugeDenied.status, 403,
+      '账号级权限覆盖角色默认：未勾选的模块写操作必须被拒绝，而不是并集放行');
+    // 权限内核：勾选内的放行、勾选外的拒绝、管理员恒为全权
+    assert.ok(PM.canUser({ role: 'quality', flags: '', perms: ['doc.edit'] }, 'doc.edit'),
+      '自定义清单内的权限点应判定为有权');
+    assert.ok(PM.canUser({ role: 'admin', flags: '', perms: [] }, 'user.manage'),
+      '管理员账号始终拥有全部权限');
+    assert.ok(!PM.canUser({ role: 'quality', flags: '', perms: ['doc.edit'] }, 'doc.approve'),
+      '自定义清单不含的权限点应判定为无权限');
+
     // 收回自定义：回到角色默认
     const reverted = await ok(api('PATCH', `/admin/users/${encodeURIComponent(qaUser.user_id)}`, {
       body: { perms: null },
     }), '恢复角色默认权限');
     assert.equal(reverted.user.perms, null, 'perms=null 表示按角色默认');
-    checks += 7;
+    checks += 11;
 
     /* ------------------------------------------- AI 配置仅管理员 */
     const engineerAiConfig = await api('GET', '/ai/config', { as: 'engineer' });

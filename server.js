@@ -443,7 +443,8 @@ const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
 const DEFAULT_PASSWORD = String(process.env.QMS_DEFAULT_PASSWORD || '123456');
 const PASSWORD_MIN_LENGTH = 6;
 // 已知弱口令：不能作为“修改后”的新口令
-const WEAK_PASSWORDS = [DEFAULT_PASSWORD, 'admin123', 'engineer123', 'quality123', 'auditor123'];
+const WEAK_PASSWORDS = [...new Set([DEFAULT_PASSWORD, '123456',
+  'admin123', 'engineer123', 'quality123', 'auditor123'])];
 // 登录失败计数（单进程内存）：连续 5 次锁 5 分钟，避免局域网内暴力尝试。
 // 键含来源 IP：只按用户名会被“随机用户名”撑爆内存，也会让攻击者锁死他人账号。
 const LOGIN_ATTEMPTS = new Map();
@@ -7452,6 +7453,7 @@ route('GET', /^\/api\/audit$/, () => ({
 route('GET', /^\/api\/exports$/, () => ({
   list: all('SELECT * FROM export_event WHERE project_id=? ORDER BY exported_at DESC LIMIT 200', CUR),
 }));
+// 备份与重算只给系统管理员：这些接口直接读写数据库文件，不属于岗位权限点
 route('GET', /^\/api\/admin\/backups$/, () => ({
   list: fs.readdirSync(BACKUP_DIR)
     .filter(name => /^qms-.*\.db$/.test(name))
@@ -7463,7 +7465,7 @@ route('GET', /^\/api\/admin\/backups$/, () => ({
       };
     })
     .sort((a, b) => b.created_at.localeCompare(a.created_at)),
-}));
+}), { roles: ['admin'] });
 // S-15：把同步从“启动隐式写入”改为显式重算，并由管理员在系统页触发
 route('POST', /^\/api\/admin\/resync$/, (m, body) => DB.tx(() => {
   const summary = syncProjectDeliverables(CUR, { reconcile: body.reconcile === true });
@@ -7471,7 +7473,7 @@ route('POST', /^\/api\/admin\/resync$/, (m, body) => DB.tx(() => {
     { created: summary.created, updated: summary.updated, conflicts: summary.conflicts },
     body.note || '手动重算交付物同步');
   return { ok: true, summary };
-}));
+}), { roles: ['admin'] });
 
 /* ---------------------------------------------------------------- 账号与权限 */
 // 角色目录：供账号管理页下拉选择（含部门、项目范围、是否副总板块）
@@ -7587,8 +7589,9 @@ route('PATCH', /^\/api\/admin\/users\/([^/]+)$/, (m, body) => DB.tx(() => {
     next.flags, next.vp_scope, next.status, permsJson, id);
   // 停用后立即失效其会话
   if (next.status !== '启用') DB.db.prepare('DELETE FROM auth_session WHERE user_id=?').run(id);
-  L.audit(actorName(), '修改账号', 'auth_user', id, userRow(old), userRow({ ...old, ...next }),
-    `账号 ${old.username} 权限/资料调整`);
+  // 审计要能看出权限变化：把本次写入的 perms_json 带进改后快照
+  L.audit(actorName(), '修改账号', 'auth_user', id, userRow(old),
+    userRow({ ...old, ...next, perms_json: permsJson }), `账号 ${old.username} 权限/资料调整`);
   return { ok: true, user: userRow(q('SELECT * FROM auth_user WHERE user_id=?', id)) };
 }), { roles: ['admin'] });
 
@@ -7654,7 +7657,7 @@ route('POST', /^\/api\/admin\/backup$/, (m, body) => {
   L.audit(body.user || '管理员', '备份', 'database', name, null, { hash, attachments: attachmentCount },
     `数据库全量备份（含附件 ${attachmentCount} 个）`);
   return { ok: true, name, hash, size: fs.statSync(target).size, attachments: attachmentCount };
-});
+}, { roles: ['admin'] });
 
 /* ---------------------------------------------------------------- 示意图 → 结构树 */
 const OCR = require('./lib/ocr');
