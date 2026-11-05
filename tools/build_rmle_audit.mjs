@@ -9,8 +9,9 @@ const require = createRequire(import.meta.url);
 const DT = require("../lib/doctpl");
 const FG = require("../lib/field-guide");
 const PPAP = require("../lib/ppap-workflow");
-const artifactToolPath =
-  "C:/Users/zhany/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/@oai/artifact-tool/dist/artifact_tool.mjs";
+// 外部表格工具的位置因机器而异，允许用环境变量覆盖，避免把本机路径写进仓库
+const artifactToolPath = process.env.ARTIFACT_TOOL_PATH
+  || path.join(process.env.USERPROFILE || process.env.HOME || ".", ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/@oai/artifact-tool/dist/artifact_tool.mjs");
 const { SpreadsheetFile, Workbook } = await import(pathToFileURL(artifactToolPath).href);
 
 const args = process.argv.slice(2);
@@ -19,16 +20,18 @@ const arg = name => {
   return index >= 0 ? args[index + 1] : "";
 };
 
+// 路径都可由命令行/环境变量覆盖，默认值相对本仓库，不写死本机位置
+const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\//, "")), "..");
 const inputPath = path.resolve(
-  arg("--input") || "C:/Users/zhany/AppData/Local/Temp/rmle-audit-data.json",
+  arg("--input") || process.env.RMLE_AUDIT_INPUT || path.join(REPO_ROOT, "outputs", "rmle-audit-data.json"),
 );
 const outputPath = path.resolve(
-  arg("--output") ||
-    "D:/小工具/二次开发APQP/resistor-qms/outputs/rmle-c-audit/RMLE(C)_项目_APQP_系统差异与导入指引_v1.0.xlsx",
+  arg("--output") || process.env.RMLE_AUDIT_OUTPUT ||
+    path.join(REPO_ROOT, "outputs", "rmle-c-audit", "RMLE(C)_项目_APQP_系统差异与导入指引_v1.0.xlsx"),
 );
 const raw = JSON.parse(await fs.readFile(inputPath, "utf8"));
 const inventory = raw.rows;
-const projectRoot = "D:/小工具/二次开发APQP/车规项目资料/车规级RMLE(C)";
+const projectRoot = arg("--source-root") || process.env.RMLE_SOURCE_ROOT || "";
 
 const headersBySheet = {
   "01_文件总账": [

@@ -120,7 +120,12 @@ async function main() {
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
       body: JSON.stringify({ username: 'auditor', password: 'auditor123' }),
     });
-    const auditorCookie = auditorLogin.headers.get('set-cookie').split(';')[0];
+    // 不校验状态就直接 split，密码错/被限流时只会抛 null-deref，真正原因被掩盖
+    assert.equal(auditorLogin.status, 200,
+      `审核员应能登录（实际 ${auditorLogin.status}：${await auditorLogin.text()}）`);
+    const auditorSetCookie = auditorLogin.headers.get('set-cookie');
+    assert.ok(auditorSetCookie, '登录响应必须下发会话 Cookie');
+    const auditorCookie = auditorSetCookie.split(';')[0];
     const auditorRead = await fetch(`${BASE}/meta?p=RES-CHIP-2026-01`, {
       headers: { Cookie: auditorCookie },
     });
@@ -132,7 +137,9 @@ async function main() {
       body: JSON.stringify({ username: 'quality', password: 'quality123' }),
     });
     assert.equal(qualityLogin.status, 200, '质量账号应能登录');
-    const qualityCookie = qualityLogin.headers.get('set-cookie').split(';')[0];
+    const qualitySetCookie = qualityLogin.headers.get('set-cookie');
+    assert.ok(qualitySetCookie, '登录响应必须下发会话 Cookie');
+    const qualityCookie = qualitySetCookie.split(';')[0];
     const auditorWrite = await fetch(`${BASE}/projects?p=RES-CHIP-2026-01`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8', Cookie: auditorCookie },

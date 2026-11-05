@@ -24,8 +24,13 @@ assert.equal(name.index, 2);
 const supplier = Guide.forColumn('P1-09', '初始 BOM', { k: 'bom' }, '供应商', 5);
 assert.match(supplier.guidance, /供应商全称/);
 
-const owner = Guide.forColumn('P0-01', '项目团队与参与方', { k: 'members' }, '联系方式', 2);
-assert.match(owner.guidance, /不能由团队成员表自动生成/);
+// 用目录里真实存在的列断言：联系方式已不在 P0-01 表格中，测一个不存在的列会永远通过
+const DT = require('../lib/doctpl');
+const memberColumns = DT.T['P0-01'].flatMap(section => section.fields || [])
+  .find(field => field.k === 'members').cols;
+assert.ok(memberColumns.includes('成员姓名'), 'P0-01 跨职能团队应包含“成员姓名”列');
+const owner = Guide.forColumn('P0-01', '项目团队与参与方', { k: 'members' }, '成员姓名', 1);
+assert.ok(owner.guidance && owner.guidance.length > 0, '真实列必须有填写说明');
 assert.equal(owner.missing.includes('待确认'), true);
 
 const feature = Guide.forColumn('P1-07', '设计目标', { k: 'targets' }, '特性', 0);

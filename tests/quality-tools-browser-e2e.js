@@ -9,6 +9,9 @@ const path = require('node:path');
 const CHROME = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const BASE = process.env.QMS_BASE_URL || 'http://127.0.0.1:8848';
 const PROJECT = process.env.QMS_PROJECT || 'SIM-APQP-20261102-01';
+// 与其它验收测试一致：账号口令从环境变量读，不能在源码里写死
+const USERNAME = process.env.QMS_E2E_USER || 'admin';
+const PASSWORD = process.env.QMS_E2E_PASSWORD || '';
 const PORT = 9700 + Math.floor(Math.random() * 140);
 const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'qms-quality-tools-e2e-'));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -29,13 +32,16 @@ async function main() {
       catch { await sleep(100); }
     }
     if (!version) throw new Error(`Chrome 启动失败${chromeError ? `：${chromeError}` : ''}`);
+    // 端口来自 BASE（可被 QMS_BASE_URL 覆盖），不能写死 8848；找不到页面要给出明确错误
+    const baseHost = new URL(BASE).host;
     let target;
     for (let index = 0; index < 100; index += 1) {
       const targets = await (await fetch(`http://127.0.0.1:${PORT}/json`)).json();
-      target = targets.find(item => item.type === 'page' && item.url.includes('8848'));
+      target = targets.find(item => item.type === 'page' && item.url.includes(baseHost));
       if (target) break;
       await sleep(100);
     }
+    if (!target) throw new Error(`未找到 QMS 浏览器页面（期望 ${baseHost}）`);
     socket = new WebSocket(target.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = reject; });
     let sequence = 0;
@@ -68,7 +74,15 @@ async function main() {
     await send('Runtime.enable');
     await send('DOM.enable');
     await waitFor(`document.querySelector('#loginUsername')`);
-    await evaluate(`document.querySelector('#loginUsername').value='admin';document.querySelector('#loginPassword').value='admin123';document.querySelector('.login-card').requestSubmit();true`);
+    if (!PASSWORD) throw new Error('缺少登录口令：请设置 QMS_E2E_PASSWORD（以及可选的 QMS_E2E_USER）');
+    await evaluate(`(() => {
+      document.querySelector('#loginUsername').value = ${JSON.stringify(USERNAME)};
+      document.querySelector('#loginPassword').value = ${JSON.stringify(PASSWORD)};
+      document.querySelector('.login-card').requestSubmit();
+      return true;
+    })()`);
+    // 登录成功后才会有业务页；失败时立刻报出，而不是等到后面的超时
+    await waitFor(`!document.querySelector('#loginScreen')`, '登录完成');
 
     await evaluate(`location.hash='pfd/INITIAL';true`);
     await waitFor(`document.querySelector('.pfd-stage-context')`);

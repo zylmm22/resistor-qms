@@ -9,6 +9,9 @@ const path = require('node:path');
 const CHROME = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const BASE = process.env.QMS_BASE_URL || 'http://127.0.0.1:8848';
 const PROJECT = process.env.QMS_PROJECT || 'SIM-APQP-20261102-01';
+// 口令从环境变量读：服务端在未配置 QMS_*_PASSWORD 时会生成一次性随机口令
+const USERNAME = process.env.QMS_E2E_USER || 'admin';
+const PASSWORD = process.env.QMS_E2E_PASSWORD || '';
 const PORT = 9400 + Math.floor(Math.random() * 300);
 const PROFILE = fs.mkdtempSync(path.join(os.tmpdir(), 'qms-dialog-e2e-'));
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -108,10 +111,11 @@ async function main() {
     await sleep(100);
     await send('Page.navigate', { url: `${BASE}/?p=${encodeURIComponent(PROJECT)}#doc/P1-11` });
     await waitFor(`document.querySelector('#loginUsername')`, '登录页');
-    await evaluate(nativeDialogGuard);
+    // nativeDialogGuard 已通过 addScriptToEvaluateOnNewDocument 注入，无需再次求值（会清空计数）
+    if (!PASSWORD) throw new Error('缺少登录口令：请设置 QMS_E2E_PASSWORD（以及可选的 QMS_E2E_USER）');
     await evaluate(`(() => {
-      document.querySelector('#loginUsername').value = 'admin';
-      document.querySelector('#loginPassword').value = 'admin123';
+      document.querySelector('#loginUsername').value = ${JSON.stringify(USERNAME)};
+      document.querySelector('#loginPassword').value = ${JSON.stringify(PASSWORD)};
       document.querySelector('.login-card').requestSubmit();
       return true;
     })()`);
@@ -155,11 +159,13 @@ async function main() {
       return true;
     })()`);
     await waitFor(`window.__revisePayload`, '修订请求载荷');
+    // 客户端只发 reason；user 由服务端按会话身份补齐，不可能出现在请求体里
     assert.deepEqual(await evaluate(`window.__revisePayload`), {
       reason: '浏览器 E2E：验证统一修订窗口',
-      user: '张工艺',
     });
     assert.equal(await evaluate(`Boolean(document.querySelector('#appDialogBackdrop'))`), false);
+    // 断言完立刻还原 fetch，避免后续断言被桩函数掩盖真实网络行为
+    await evaluate(`window.fetch = window.__originalFetch; true`);
 
     await evaluate(`(() => {
       window.__multiDialogResult = null;

@@ -138,6 +138,7 @@ async function main() {
     assert.ok(png.item && png.item.attachment_id, '返回附件记录');
     assert.equal(png.item.mime, 'image/png', '按魔数识别 PNG');
     assert.equal(png.item.is_image, true, '标记为图片');
+    assert.equal(png.item.is_pdf, false, 'PNG 不应被标记为 PDF');
     // 访问 URL 必须自带项目参数：<img src> / <embed src> 不经过前端 api()，
     // 少了 ?p= 服务端会按默认项目解析，非默认项目的附件一律 404（曾导致“上传成功但预览空白”）
     assert.match(png.item.url, /\/api\/attachments\/.+\/file\?p=ATT-ACC$/, '返回带项目参数的访问 URL');

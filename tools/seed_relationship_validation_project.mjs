@@ -575,8 +575,12 @@ async function verifyProject() {
 }
 
 async function main() {
+  // 账号口令从环境变量读，源码里不留默认凭据
+  const username = process.env.QMS_USER || "admin";
+  const password = process.env.QMS_PASSWORD || "";
+  if (!password) throw new Error("缺少登录口令：请设置 QMS_PASSWORD（可选 QMS_USER）");
   await rawRequest(BASE + "/auth/login", {
-    method: "POST", body: { username: "admin", password: "admin123" },
+    method: "POST", body: { username, password },
   });
   const projects = await rawRequest(BASE + "/projects");
   const source = projects.list.find(item => item.project_id === "P-MVYSBPBA") || projects.list[0];

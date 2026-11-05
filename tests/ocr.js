@@ -17,10 +17,11 @@ assert.deepEqual(OCR.labelsFromWords(flowWords), [
 (async () => {
   const words = await OCR.runOCR(path.join(__dirname, '..', 'public', 'samples', 'resistor-drawing.png'));
   const labels = OCR.labelsFromWords(words);
-  for (const expected of ['白瓷棒', '膜层', '清漆', '缓冲层', '塑封层', '引线帽', '螺旋槽']) {
-    assert.ok(labels.includes(expected), `示意图 OCR 缺少结构词：${expected}`);
-  }
-  process.stdout.write('ocr: RapidOCR 示意图文字和结构词提取通过\n');
+  // 结果依赖本机 OCR 引擎（RapidOCR / Windows.Media.Ocr）与语言包，缺词时报出全部缺项
+  const missing = ['白瓷棒', '膜层', '清漆', '缓冲层', '塑封层', '引线帽', '螺旋槽']
+    .filter(word => !labels.includes(word));
+  assert.equal(missing.length, 0, `示意图 OCR 缺少结构词：${missing.join('、')}`);
+  process.stdout.write('ocr: 示意图文字和结构词提取通过\n');
 })().catch(error => {
   console.error(error.stack || error.message);
   process.exitCode = 1;

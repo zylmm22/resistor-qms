@@ -103,19 +103,24 @@ async function loginAsSeed(username) {
   }), `重置 ${username} 口令`);
   const cookie = await login(username, reset.initial_password);
   cookies[username] = cookie;
-  const me = await ok(fetch(`${BASE}/api/auth/me`, { headers: { Cookie: cookie } }).then(async response =>
-    ({ status: response.status, json: await response.json() })), `读取 ${username} 身份`);
-  // 重置后是“必须改密”状态，服务端会拒绝其他接口；先改掉再继续
+  const readMe = async () => ok(fetch(`${BASE}/api/auth/me`, { headers: { Cookie: cookie } })
+    .then(async response => ({ status: response.status, json: await response.json() })), `读取 ${username} 身份`);
+  // 重置后是“必须改密”状态，服务端会拒绝其他接口；先改掉，再按新会话重新读取身份
+  let me = await readMe();
   if (me.user.must_change_password) {
-    const next = `${reset.initial_password}!r`;
     const changed = await fetch(`${BASE}/api/auth/change-password`, {
       method: 'POST',
       headers: { Cookie: cookie, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ current_password: reset.initial_password, new_password: next }),
+      body: JSON.stringify({
+        current_password: reset.initial_password,
+        new_password: `${reset.initial_password}!r`,
+      }),
     });
     assert.equal(changed.status, 200, `${username} 首次改密失败`);
+    me = await readMe();
+    assert.equal(me.user.must_change_password, false, `${username} 改密后应清除强制改密标记`);
   }
-  return { cookie, user: me.user, password: reset.initial_password };
+  return { cookie, user: me.user };
 }
 
 async function main() {
@@ -260,12 +265,8 @@ async function main() {
       `分管工艺的副总可以批准工艺交付物（实际 ${vpOpsApprove.status}：${JSON.stringify(vpOpsApprove.json)}）`);
     checks += 2;
 
-    const chief = await loginAsSeed('chief');
-    const chiefApproves = await api('POST', '/docs/P2-06/approve', { as: 'chief', body: {} });
-    assert.notEqual(chiefApproves.status, 403, '总工有交付物审批权（此处仅验证不是权限拒绝）');
-    checks += 1;
-
     /* ------------------------------------------- 修订 / 恢复同样受归属约束 */
+    // P2-06 此刻仍是草稿：越权方被归属校验挡下（403），归属方通过校验但被状态前置条件拒绝（400）
     const engineerReviseDesign = await api('POST', '/docs/P2-06/revise', {
       as: 'engineer', body: { reason: '工艺越权修订设计图纸' },
     });
@@ -274,9 +275,18 @@ async function main() {
     const designReviseDesign = await api('POST', '/docs/P2-06/revise', {
       as: 'design01', body: { reason: '设计依据顾客图纸更新' },
     });
-    assert.notEqual(designReviseDesign.status, 403,
-      `设计不被归属校验拦截（实际 ${designReviseDesign.status}：${JSON.stringify(designReviseDesign.json)}）`);
-    checks += 1;
+    assert.equal(designReviseDesign.status, 400,
+      `设计应通过归属校验、仅被状态前置条件拦下（实际 ${designReviseDesign.status}：${JSON.stringify(designReviseDesign.json)}）`);
+    assert.match(String(designReviseDesign.json.error), /只有已批准/, '应由“只有已批准”状态校验拒绝');
+    checks += 2;
+
+    // 总工审批权：P2-06 必须先由归属岗位填好内容并提交，否则批准会被内容校验挡下
+    await fillAndSubmit('P2-06', 'design01');
+    const chief = await loginAsSeed('chief');
+    const chiefApproves = await api('POST', '/docs/P2-06/approve', { as: 'chief', body: {} });
+    assert.equal(chiefApproves.status, 200,
+      `总工可以批准交付物（实际 ${chiefApproves.status}：${JSON.stringify(chiefApproves.json)}）`);
+    checks += 2;
     const designRestore = await api('POST', `/docs/P3-02/restore/${encodeURIComponent('pre-restore')}`, {
       as: 'design01', body: {},
     });

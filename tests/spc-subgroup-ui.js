@@ -15,7 +15,9 @@ assert.match(app, /JSON\.parse\(\(history\?\.dataset \|\| det\?\.latest\)\?\.dat
 assert.match(css, /\.spc-subgroup-scroll\s*\{/, '大量子组数据需要独立滚动区域');
 assert.match(css, /\.spc-subgroup-row-bad\s+td\s*\{/, '判异子组需要在明细中突出显示');
 assert.match(app, /新数据批次号（可选）/, '批次号必须明确用于新数据导入');
-assert.doesNotMatch(app, /id="spcBatch" value="LOT-\$\{Date\.now/, '切换历史数据时不得重新生成随机批次号');
+// 原断言匹配的模板形态已不存在，永远通过；改为检查 spcBatch 输入框不带预填的随机值
+const batchInput = app.slice(app.indexOf('id="spcBatch"'), app.indexOf('id="spcBatch"') + 200);
+assert.ok(!/value="LOT-\$\{Date\.now/.test(batchInput), '切换历史数据时不得重新生成随机批次号');
 // 数值显示：子组明细、tooltip、规范限与控制限都必须走统一精度函数，不能裸插浮点数
 const tableBlock = app.slice(app.indexOf('function spcSubgroupTable('), app.indexOf('async function vSpc()'));
 assert.doesNotMatch(tableBlock, /num\([^)]*,\s*6\)/, '子组明细不得再使用固定 6 位小数（会显示 1.355000）');

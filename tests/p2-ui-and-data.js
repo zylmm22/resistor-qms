@@ -43,10 +43,18 @@ const P = require('../lib/parse');
 let checks = 0;
 
 /* ------------------------------------------------------------ 静态断言 */
+/** 按标记切片；标记缺失时直接报出是哪一个，避免后续断言给出误导性失败 */
+function sliceBy(mark, startMarker, endMarker) {
+  const from = app.indexOf(startMarker);
+  const to = endMarker ? app.indexOf(endMarker, from + 1) : app.length;
+  assert.ok(from >= 0, `未找到代码标记（起点）：${startMarker}`);
+  assert.ok(to > from, `未找到代码标记（终点）：${endMarker}`);
+  return app.slice(from, to);
+}
 const blocks = {
-  addChar: app.slice(app.indexOf('async function addChar(kind)'), app.indexOf('function openQuickCharacter')),
-  controlChart: app.slice(app.indexOf('function controlChart(stat, char)'), app.indexOf('function spcHistogram')),
-  spcView: app.slice(app.indexOf('const chartTypeUpper = String(activeChartType'), app.indexOf("$('#viewSub').textContent = `${activeChartType}")),
+  addChar: sliceBy('addChar', 'async function addChar(kind)', 'function openQuickCharacter'),
+  controlChart: sliceBy('controlChart', 'function controlChart(stat, char)', 'function spcHistogram'),
+  spcView: sliceBy('spcView', 'const chartTypeUpper = String(activeChartType', "$('#viewSub').textContent = `${activeChartType}"),
 };
 
 assert.match(blocks.controlChart, /const yTicks = Array\.from\(\{ length: 5 \}/, 'Q-04：控制图应绘制 y 轴刻度');

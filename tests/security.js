@@ -44,31 +44,41 @@ function makeZip(raw, method = 8) {
 }
 
 async function main() {
+  // 不使用系统已知默认口令：这些值已被服务端列入黑名单，复用会让弱口令测试看起来“正常”
+  const PASSWORDS = {
+    admin: 'Security-Admin-2026!', engineer: 'Security-Engineer-2026!',
+    quality: 'Security-Quality-2026!', auditor: 'Security-Auditor-2026!',
+  };
   const child = spawn(process.execPath, ['server.js'], {
     cwd: ROOT,
     env: {
       ...process.env, PORT: String(PORT), QMS_DB_PATH: DB_PATH, NODE_NO_WARNINGS: '1',
-      QMS_ADMIN_PASSWORD: 'admin123', QMS_ENGINEER_PASSWORD: 'engineer123',
-      QMS_QUALITY_PASSWORD: 'quality123', QMS_AUDITOR_PASSWORD: 'auditor123',
+      QMS_ADMIN_PASSWORD: PASSWORDS.admin, QMS_ENGINEER_PASSWORD: PASSWORDS.engineer,
+      QMS_QUALITY_PASSWORD: PASSWORDS.quality, QMS_AUDITOR_PASSWORD: PASSWORDS.auditor,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
   });
   try {
+    let ready = false;
     for (let i = 0; i < 80; i += 1) {
       try {
-        const ready = await fetch(`${API}/meta`);
-        if (ready.status === 401) break;
+        const probe = await fetch(`${API}/meta`);
+        if (probe.status === 401) { ready = true; break; }
       } catch (e) { /* wait */ }
       await new Promise(resolve => setTimeout(resolve, 100));
     }
+    // 启动失败必须明确报出，否则后续请求会打到空白端口并给出误导性错误
+    assert.ok(ready, '服务未启动（8 秒内 /api/meta 未返回 401）');
     const login = await fetch(`${API}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username: 'admin', password: 'admin123' }),
+      body: JSON.stringify({ username: 'admin', password: PASSWORDS.admin }),
     });
-    assert.equal(login.status, 200);
-    const cookie = login.headers.get('set-cookie').split(';')[0];
+    assert.equal(login.status, 200, `管理员登录应成功，实际 ${login.status}`);
+    const setCookie = login.headers.get('set-cookie');
+    assert.ok(setCookie, '登录响应必须下发会话 Cookie');
+    const cookie = setCookie.split(';')[0];
     const headers = { Cookie: cookie };
 
     const batch = Array.from({ length: 100 }, () => fetch(`${API}/meta?p=RES-CHIP-2026-01`, { headers }));
@@ -82,14 +92,16 @@ async function main() {
     ]);
     assert.ok(mixed.every(response => response.status === 200), '并发读取业务页面不应失败');
 
+    // 匹配具体信息：/ZIP/ 同时命中三种失败，会让“方式不支持”冒充“体积守卫生效”。
+    // 33 MB 在解压阶段就会被 maxOutputLength 拦下，因此两种体积相关错误都算通过。
     assert.throws(
       () => P.readZip(makeZip(Buffer.alloc(33 * 1024 * 1024))),
-      /ZIP/,
+      /条目过大|解压失败/,
       '超大解压条目必须被拒绝',
     );
     assert.throws(
       () => P.readZip(makeZip(Buffer.from('bad'), 99)),
-      /ZIP/,
+      /不支持的 ZIP 压缩方式/,
       '未知压缩方式必须被拒绝',
     );
     process.stdout.write('Security tests passed: 160 concurrent reads + malicious ZIP checks\n');
