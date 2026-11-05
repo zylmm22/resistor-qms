@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>电阻器质量系统 · APQP / FMEA / SPC / MSA / PPAP</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">RQ</div>
+      <div class="brand-txt">
+        <b>电阻器质量系统</b>
+        <span>APQP · FMEA · SPC · MSA · PPAP</span>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div class="side-foot">
+      <div class="mini" id="sideProject">—</div>
+      <div class="mini sub" id="sidePhase">—</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="tb-left">
+        <h1 id="viewTitle">概览</h1>
+        <p id="viewSub">—</p>
+      </div>
+      <div class="tb-right">
+        <div class="pill" id="phaseChip">—</div>
+        <select id="role" class="sel" title="当前角色">
+          <option>工艺工程师</option>
+          <option>设计工程师</option>
+          <option>质量工程师</option>
+          <option>审核员（只读）</option>
+        </select>
+        <button class="btn ghost" id="btnPassword" title="修改本人登录口令">修改口令</button>
+        <button class="btn ghost" id="btnRefresh">刷新</button>
+      </div>
+    </header>
+    <section id="qualityLinks" class="quality-links-slot" hidden></section>
+    <div class="workspace-body">
+      <section id="view" class="view"></section>
+      <aside id="relatedPreview" class="related-preview-panel" hidden>
+        <div class="related-preview-head">
+          <div><span class="lbl">关联文件预览</span><b id="relatedPreviewTitle">—</b></div>
+          <div class="related-preview-head-actions">
+            <button class="btn sm ghost" id="relatedPreviewCopyAll">复制全部</button>
+            <button class="x" id="relatedPreviewClose" title="关闭预览">✕</button>
+          </div>
+        </div>
+        <div class="related-preview-body" id="relatedPreviewBody"></div>
+      </aside>
+    </div>
+  </main>
+</div>
+
+<div id="drawer" class="drawer"><div class="drawer-box"></div></div>
+<div id="toast" class="toast"></div>
+
+<script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,11 @@
+'use strict';
+const fs = require('node:fs');
+const path = require('node:path');
+const file = path.join(__dirname, '..', 'public', 'app.js');
+let source = fs.readFileSync(file, 'utf8');
+const before = source;
+source = source.replace(/\n\s*user: '[^']*',/g, '');
+source = source.replace(/\n\s*approved_by: '质量经理 王',/g, '');
+source = source.replace(/\n\s*published_by: '[^']*',/g, '');
+fs.writeFileSync(file, source);
+console.log('stripped', before === source ? 'nothing' : 'demo actors');

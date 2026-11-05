@@ -1,0 +1,8 @@
+# 运行时数据：数据库、附件、备份、上传模板，均不入库
+data/
+node_modules/
+*.log
+
+# 生成物与临时产物
+outputs/
+*.tmp
