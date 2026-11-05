@@ -17,6 +17,12 @@ initial-credentials*.txt
 *.pem
 *.key
 
+# 内部文档：评审记录、修复记录、组织权限清单、过程截图、第三方参考表
+# 文件保留在本地，只不上传（仓库对外公开）
+/docs/
+/web-cp-reference.xlsx
+/web-pfmea-reference.xlsx
+
 # 生成物与临时产物
 outputs/
 *.tmp
