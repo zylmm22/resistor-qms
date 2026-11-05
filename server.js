@@ -439,8 +439,31 @@ function requireCurrentProject(sql, ...args) {
 }
 
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000;
-// 登录失败计数（单进程内存）：连续 5 次锁 5 分钟，避免局域网内暴力尝试
+// 登录失败计数（单进程内存）：连续 5 次锁 5 分钟，避免局域网内暴力尝试。
+// 键含来源 IP：只按用户名会被“随机用户名”撑爆内存，也会让攻击者锁死他人账号。
 const LOGIN_ATTEMPTS = new Map();
+const LOGIN_ATTEMPT_TTL_MS = 15 * 60 * 1000;
+const LOGIN_ATTEMPT_MAX = 5000;
+function loginAttemptKey(req, username) {
+  const ip = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim()
+    || (req.socket && req.socket.remoteAddress) || 'unknown';
+  return `${ip}|${username.slice(0, 64)}`;
+}
+/** 惰性清理：超过 TTL 的记录在下次访问时丢弃，同时兜住内存上限 */
+function pruneLoginAttempts() {
+  const now = Date.now();
+  for (const [key, entry] of LOGIN_ATTEMPTS) {
+    if (!entry.until && now - entry.last > LOGIN_ATTEMPT_TTL_MS) LOGIN_ATTEMPTS.delete(key);
+    else if (entry.until && entry.until < now - LOGIN_ATTEMPT_TTL_MS) LOGIN_ATTEMPTS.delete(key);
+  }
+  if (LOGIN_ATTEMPTS.size > LOGIN_ATTEMPT_MAX) {
+    // 仍然超限时按最久未活跃淘汰，保证表不会无限增长
+    const sorted = [...LOGIN_ATTEMPTS.entries()].sort((a, b) => a[1].last - b[1].last);
+    for (const [key] of sorted.slice(0, LOGIN_ATTEMPTS.size - LOGIN_ATTEMPT_MAX)) {
+      LOGIN_ATTEMPTS.delete(key);
+    }
+  }
+}
 const DUMMY_SALT = crypto.randomBytes(16).toString('hex');
 const DUMMY_HASH = DB.passwordDigest('not-a-real-password', DUMMY_SALT);
 // 角色名称统一由权限内核提供（含新增的部门岗位角色）；缺省回退旧名称
@@ -471,7 +494,10 @@ function publicUser(user) {
     must_change_password: !!user.must_change_password } : null;
 }
 function setSessionCookie(res, token, maxAge = SESSION_TTL_MS / 1000) {
-  res.setHeader('Set-Cookie', `qms_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}`);
+  // 有 TLS 前置（QMS_HTTPS=1）时才加 Secure，否则明文 HTTP 下浏览器会丢弃 Cookie 导致无法登录
+  const secure = String(process.env.QMS_HTTPS || '') === '1' ? '; Secure' : '';
+  res.setHeader('Set-Cookie',
+    `qms_session=${encodeURIComponent(token)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure}`);
 }
 /* ---- 动作级权限：auditor < engineer < quality < admin ---- */
 const ROLE_RANK = { auditor: 1, engineer: 2, quality: 3, admin: 4 };
@@ -628,6 +654,9 @@ const fmtNumber = value => Number.isFinite(+value) ? Number(+value).toFixed(2) :
 function recordApproval({ projectId, actionType, objectType, objectId, title, payload, approvedBy, requestedBy = '', note = '' }) {
   if (!approvedBy) throw new Error('该活动需要填写批准人');
   requestedBy = requestedBy || actorName();
+  // 请求体里的批准人会被会话身份覆盖，单人操作会变成“自己批自己”；
+  // 记录里统一标注为本人操作，避免审计把自动批准误读为双人审批
+  approvedBy = `${approvedBy}（本人操作）`;
   const id = uniqueId('APR', projectId);
   DB.db.prepare(`INSERT INTO activity_approval(
     approval_id,project_id,action_type,object_type,object_id,title,payload_json,status,
@@ -1897,6 +1926,10 @@ function createProjectCore(body) {
   if (q('SELECT 1 FROM project WHERE project_id=?', id)) throw new Error('项目编号已存在：' + id);
   const source = sourceId ? q('SELECT * FROM project WHERE project_id=?', sourceId) : null;
   if (sourceId && !source) throw new Error('复制来源项目不存在');
+  // 复制等于读全量内容：不能借复制绕过项目成员限制
+  if (source && !canAccessProject(sessionUser(), sourceId)) {
+    throw Object.assign(new Error('不能复制无权访问的项目'), { statusCode: 403 });
+  }
   const familyId = String(body.family_id || (source && source.family_id) || 'FM').trim();
   const family = q("SELECT * FROM product_family WHERE family_id=? AND COALESCE(status,'生效')<>'作废'", familyId);
   if (!family) throw new Error('产品族不存在');
@@ -2346,6 +2379,8 @@ route('GET', /^\/api\/meta$/, () => {
 });
 
 route('POST', /^\/api\/projects$/, (m, body) => {
+  // 新建项目会生成整树数据并复制来源项目内容，只允许管理员
+  requirePermission('project.manage', '新建项目');
   return createProjectCore(body);
 });
 
@@ -10603,7 +10638,9 @@ const server = http.createServer(async (req, res) => {
       const body = await readBody(req);
       const username = String(body.username || '').trim();
       const password = String(body.password || '');
-      const attempt = LOGIN_ATTEMPTS.get(username);
+      pruneLoginAttempts();
+      const attemptKey = loginAttemptKey(req, username);
+      const attempt = LOGIN_ATTEMPTS.get(attemptKey);
       if (attempt && attempt.until > Date.now()) {
         return json(res, 429, { error: `尝试次数过多，请 ${Math.ceil((attempt.until - Date.now()) / 60000)} 分钟后再试` });
       }
@@ -10614,10 +10651,12 @@ const server = http.createServer(async (req, res) => {
         : (DB.verifyPassword(password, DUMMY_SALT, DUMMY_HASH), false);
       if (!valid) {
         const count = (attempt?.count || 0) + 1;
-        LOGIN_ATTEMPTS.set(username, { count, until: count >= 5 ? Date.now() + 5 * 60000 : 0 });
+        LOGIN_ATTEMPTS.set(attemptKey, {
+          count, last: Date.now(), until: count >= 5 ? Date.now() + 5 * 60000 : 0,
+        });
         return json(res, 401, { error: '用户名或密码错误' });
       }
-      LOGIN_ATTEMPTS.delete(username);
+      LOGIN_ATTEMPTS.delete(attemptKey);
       DB.db.prepare('DELETE FROM auth_session WHERE expires_at<?').run(DB.now());
       const token = crypto.randomBytes(32).toString('base64url');
       const expiresAt = new Date(Date.now() + SESSION_TTL_MS + 8 * 3600e3)
@@ -10887,9 +10926,11 @@ const server = http.createServer(async (req, res) => {
       return json(res, 404, { error: '接口不存在: ' + p });
     } catch (e) {
       console.error(e && e.stack ? e.stack : e);
-      // details 用于把“影响面”随 409 一起返回，避免只有一句错误提示
+      // SQLite / 文件系统异常都会带 code（ERR_SQLITE_ERROR、ENOENT…），消息里含表名、列名或路径；
+      // 业务校验错误由我们自己抛普通 Error（无 code）。只原样回传后者。
+      const safeToShow = e && (e.statusCode || !e.code);
       return json(res, e.statusCode || 400, {
-        error: e.message || '请求失败',
+        error: safeToShow ? (e.message || '请求失败') : '操作失败，请查看服务端日志或联系管理员',
         ...(e.details ? { details: e.details } : {}),
       });
     }

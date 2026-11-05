@@ -3,7 +3,10 @@
 
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
-const esc = s => (s == null ? '' : String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])));
+// 单引号也要转义：属性值可能写成 data-x='…'（如预警行的 data-act），漏掉就能跳出属性注入
+const esc = s => (s == null ? '' : String(s).replace(/[&<>"']/g, c => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[c])));
 const fmt = (v, d = 2) => (v == null || v === '' ? '—' : Number(v).toFixed(d));
 /**
  * SPC 数值显示：最多 maxDecimals 位小数（默认 6），并同时约束整数位数，
@@ -323,14 +326,31 @@ function paintNav() {
     : state.view === 'ppapEvidence' ? 'ppap' : state.view;
   $('#nav').innerHTML = NAV.filter(n => !n.perm || userCan(n.perm)).map(n => {
     if (n.g) return `<div class="nav-group">${n.g}</div>`;
-    const item = `<div class="nav-item ${active === n.id ? 'on' : ''}" data-v="${n.id}"><span class="dot"></span>${n.t}</div>`;
+    // 导航是 <div>，加 tabindex + 键盘处理才能用 Tab 聚焦、Enter/空格进入
+    const item = `<div class="nav-item ${active === n.id ? 'on' : ''}" data-v="${n.id}" tabindex="0" role="link">`
+      + `<span class="dot"></span>${n.t}</div>`;
     if (n.id !== 'apqp') return item;
     return item + `<div class="nav-sub">${APQP_NAV_PHASES.map(phase =>
-      `<div class="nav-subitem ${active === 'apqp' && state.apqpPhase === phase.no ? 'on' : ''}" data-apqp-nav="${phase.no}">
+      `<div class="nav-subitem ${active === 'apqp' && state.apqpPhase === phase.no ? 'on' : ''}"
+        data-apqp-nav="${phase.no}" tabindex="0" role="link">
         <span class="mono">${phase.no}</span><span>${esc(phase.name)}</span></div>`).join('')}</div>`;
   }).join('');
-  $$('#nav .nav-item[data-v]').forEach(el => el.onclick = () => go(el.dataset.v));
-  $$('#nav [data-apqp-nav]').forEach(el => el.onclick = () => goApqpPhase(+el.dataset.apqpNav));
+  $$('#nav .nav-item[data-v]').forEach(el => {
+    el.onclick = () => go(el.dataset.v);
+    el.onkeydown = event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      go(el.dataset.v);
+    };
+  });
+  $$('#nav [data-apqp-nav]').forEach(el => {
+    el.onclick = () => goApqpPhase(+el.dataset.apqpNav);
+    el.onkeydown = event => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      goApqpPhase(+el.dataset.apqpNav);
+    };
+  });
 }
 
 async function boot() {
@@ -931,7 +951,9 @@ async function vAlerts() {
     </div>` : '<div class="empty">当前没有待处理预警</div>';
 
   $$('[data-act]').forEach(b => b.onclick = () => {
-    const a = JSON.parse(b.dataset.act);
+    // 浏览器读取属性时已还原 HTML 实体，这里只需容错解析
+    let a;
+    try { a = JSON.parse(b.dataset.act); } catch (e) { return; }
     if (a.type === 'module') { if (a.id === 'fmea' && a.arg) state.fmeaType = a.arg; go(a.id); }
     else if (a.type === 'doc') openDoc(a.code);
     else if (a.type === 'page') go(a.id);
@@ -1178,7 +1200,7 @@ async function vProjects() {
 
   $('#view').innerHTML = `
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-      <button class="btn" id="btnNewProj">＋ 新建项目</button>
+      ${userCan('project.manage') ? '<button class="btn" id="btnNewProj">＋ 新建项目</button>' : ''}
     </div>
     <div class="grid g3">
       ${d.list.map(p => {
@@ -1208,7 +1230,7 @@ async function vProjects() {
             </div>
             <button class="btn ${cur ? 'ghost' : ''} wide" data-open="${p.project_id}" style="margin-top:14px">
               ${cur ? '进入项目' : '切换到此项目'}</button>
-            <button class="btn sm ghost" data-del-proj="${p.project_id}" style="margin-top:6px;width:100%;color:#B91C1C;border-color:#F3C6C6">删除此项目</button>
+            ${userCan('project.manage') ? `<button class="btn sm ghost" data-del-proj="${p.project_id}" style="margin-top:6px;width:100%;color:#B91C1C;border-color:#F3C6C6">删除此项目</button>` : ''}
           </div>
         </div>`;
       }).join('')}
@@ -1249,7 +1271,7 @@ async function vProjects() {
           <select id="npCopy"><option value="">— 空白项目 —</option>
             ${d.list.map(p => `<option value="${esc(p.project_id)}">${esc(p.project_id)} ${esc(p.name)}</option>`).join('')}
           </select>
-          <div class="dim" style="font-size:11px;margin-top:4px">复制会复用交付物、FMEA、工序、CP 和客户模板；复制活动的批准人取当前登录账号并写入审计。</div>
+          <div class="dim" style="font-size:11px;margin-top:4px">复制会复用交付物、FMEA、工序、CP 和客户模板；只能复制自己有权访问的项目，复制活动记入审计。</div>
         </div>
         <button class="btn" id="npSave">创建</button>
       </div>`;
@@ -7929,14 +7951,16 @@ async function vMsaContent() {
   $('#view').innerHTML = `
     <div class="msa-tabs" role="tablist">
       ${canEditGauge ? `<button class="msa-tab ${currentTab === 'ledger' ? 'on' : ''}" data-msa-tab="ledger" role="tab"
+        aria-selected="${currentTab === 'ledger'}" aria-controls="msaPanelLedger"
         title="检具台账、校准状态、计划待建台账、测量能力评定（企业管理部）">
         台账与校准<small>企业管理部</small></button>` : ''}
       <button class="msa-tab ${currentTab === 'study' ? 'on' : ''}" data-msa-tab="study" role="tab"
+        aria-selected="${currentTab === 'study'}" aria-controls="msaPanelStudy"
         title="MSA 计划、研究设计、数据矩阵、结果与历史（质量管理部）">
         研究设计与数据<small>质量管理部</small></button>
     </div>
-    <div class="msa-panel" data-msa-panel="ledger" ${currentTab === 'ledger' ? '' : 'hidden'}>${ledgerPanel}</div>
-    <div class="msa-panel" data-msa-panel="study" ${currentTab === 'study' ? '' : 'hidden'}>
+    <div class="msa-panel" id="msaPanelLedger" data-msa-panel="ledger" role="tabpanel" ${currentTab === 'ledger' ? '' : 'hidden'}>${ledgerPanel}</div>
+    <div class="msa-panel" id="msaPanelStudy" data-msa-panel="study" role="tabpanel" ${currentTab === 'study' ? '' : 'hidden'}>
     ${canStudy ? '' : '<div class="alert warn"><div>当前账号没有 MSA 研究编制权限（需质量工程师 / 检验员 / 工艺工程师）；可查看研究记录与结果，但不能生成数据或计算。</div></div>'}
     <div class="grid g4" style="margin-bottom:14px">
       <div class="kpi"><div class="k">检具台账</div><div class="v">${activeGauges.length}<small>台可用</small></div><div class="d">共 ${ledgerGauges.length} 台${planOnlyGauges.length ? ` · 计划待建台账 ${planOnlyGauges.length}` : ''}</div></div>
@@ -8108,7 +8132,11 @@ async function vMsaContent() {
     tab.onclick = () => {
       const target = tab.dataset.msaTab;
       state.msaTab = target;
-      $$('[data-msa-tab]').forEach(item => item.classList.toggle('on', item === tab));
+      $$('[data-msa-tab]').forEach(item => {
+        item.classList.toggle('on', item === tab);
+        // 读屏软件靠 aria-selected 判断当前页签
+        item.setAttribute('aria-selected', String(item === tab));
+      });
       $$('[data-msa-panel]').forEach(panel => {
         panel.hidden = panel.dataset.msaPanel !== target;
       });

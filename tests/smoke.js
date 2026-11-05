@@ -16,6 +16,11 @@ const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'resistor-qms-test-'));
 const DB_PATH = path.join(TMP, 'qms.db');
 const PORT = 19000 + Math.floor(Math.random() * 1000);
 const BASE = `http://127.0.0.1:${PORT}/api`;
+// 不使用系统已知默认口令（服务端把它们列入黑名单），每个测试库用独立口令
+const SMOKE_PASSWORDS = {
+  admin: 'Smoke-Admin-2026!', engineer: 'Smoke-Engineer-2026!',
+  quality: 'Smoke-Quality-2026!', auditor: 'Smoke-Auditor-2026!',
+};
 let output = '';
 let cookie = '';
 
@@ -55,8 +60,8 @@ function startServer() {
     // 测试显式配置口令：系统已不再内置已知默认口令，未配置时会生成一次性随机口令并写入文件
     env: {
       ...process.env, PORT: String(PORT), QMS_DB_PATH: DB_PATH, NODE_NO_WARNINGS: '1',
-      QMS_ADMIN_PASSWORD: 'admin123', QMS_ENGINEER_PASSWORD: 'engineer123',
-      QMS_QUALITY_PASSWORD: 'quality123', QMS_AUDITOR_PASSWORD: 'auditor123',
+      QMS_ADMIN_PASSWORD: SMOKE_PASSWORDS.admin, QMS_ENGINEER_PASSWORD: SMOKE_PASSWORDS.engineer,
+      QMS_QUALITY_PASSWORD: SMOKE_PASSWORDS.quality, QMS_AUDITOR_PASSWORD: SMOKE_PASSWORDS.auditor,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
@@ -112,13 +117,13 @@ async function main() {
     assert.equal(unauthenticated.status, 401, '未登录 API 必须拒绝访问');
     const login = await request('/auth/login', {
       method: 'POST',
-      body: { username: 'admin', password: 'admin123' },
+      body: { username: 'admin', password: SMOKE_PASSWORDS.admin },
     });
     assert.equal(login.user.role, 'admin');
     const auditorLogin = await fetch(`${BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ username: 'auditor', password: 'auditor123' }),
+      body: JSON.stringify({ username: 'auditor', password: SMOKE_PASSWORDS.auditor }),
     });
     // 不校验状态就直接 split，密码错/被限流时只会抛 null-deref，真正原因被掩盖
     assert.equal(auditorLogin.status, 200,
@@ -134,7 +139,7 @@ async function main() {
     const qualityLogin = await fetch(`${BASE}/auth/login`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json; charset=utf-8' },
-      body: JSON.stringify({ username: 'quality', password: 'quality123' }),
+      body: JSON.stringify({ username: 'quality', password: SMOKE_PASSWORDS.quality }),
     });
     assert.equal(qualityLogin.status, 200, '质量账号应能登录');
     const qualitySetCookie = qualityLogin.headers.get('set-cookie');
